@@ -1,7 +1,6 @@
-# Pollinations Plugin for Limnoria
-
 **-- Inspired on oddluck CHATGPT plugin --**
 
+# Pollinations Plugin for Limnoria
 Use the Pollinations.ai API for text and image generation in your IRC bot.
 
 ## Features
