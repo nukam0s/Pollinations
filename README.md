@@ -20,7 +20,7 @@ Use the Pollinations.ai API for text and image generation in your IRC bot.
 
 Set up the bot's personality:
 ```
-@config plugins.pollinations.prompt "You are $botnick the IRC bot. Be brief, helpful"
+@config plugins.pollinations.prompt "u are an AI bot to assist humanity, be helpful"
 ```
 
 ### Text Generation Options
