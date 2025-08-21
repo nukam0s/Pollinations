@@ -175,4 +175,32 @@ conf.registerChannelValue(
     ),
 )
 
+# Auto-reply configuration
+conf.registerChannelValue(
+    Pollinations,
+    "auto_reply",
+    registry.Boolean(
+        False,
+        _("""Enable automatic replies to trigger words"""),
+    ),
+)
+
+conf.registerChannelValue(
+    Pollinations,
+    "trigger_words",
+    registry.SpaceSeparatedListOfStrings(
+        [],
+        _("""Space-separated list of words that trigger auto-reply"""),
+    ),
+)
+
+conf.registerChannelValue(
+    Pollinations,
+    "trigger_probability",
+    registry.Float(
+        1.0,
+        _("""Probability (0.0-1.0) of responding to trigger words"""),
+    ),
+)
+
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:

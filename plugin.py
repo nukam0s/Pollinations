@@ -19,9 +19,39 @@ class Pollinations(callbacks.Plugin):
     def __init__(self, irc):
         self.__parent = super(Pollinations, self)
         self.__parent.__init__(irc)
-
+    
+    def doPrivmsg(self, irc, msg):
+        if not irc.isChannel(msg.channel):
+            return
+            
+        if not self.registryValue("auto_reply", msg.channel):
+            return
+            
+        if msg.nick == irc.nick:
+            return
+            
+        trigger_words = self.registryValue("trigger_words", msg.channel)
+        if not trigger_words:
+            return
+            
+        message = msg.args[1].lower()
+        
+        for word in trigger_words:
+            processed_word = word.replace("$botnick", irc.nick).lower()
+            if processed_word in message:
+                probability = self.registryValue("trigger_probability", msg.channel)
+                if random.random() <= probability:
+                    self._do_chat(irc, msg, msg.args[1])
+                    break
+    
     def chat(self, irc, msg, args, text):
         """Generate text using Pollinations.ai API"""
+        self._do_chat(irc, msg, text)
+
+    chat = wrap(chat, ["text"])
+
+    def _do_chat(self, irc, msg, text):
+        """Internal chat processing"""
         channel = msg.channel
         if not irc.isChannel(channel):
             channel = msg.nick
@@ -29,15 +59,15 @@ class Pollinations(callbacks.Plugin):
         if not text.strip():
             irc.reply("Please provide a prompt")
             return
-    
+            
         try:
             if self.registryValue("nick_include", msg.channel):
                 text = "%s: %s" % (msg.nick, text)
-
+                
             prompt = self.registryValue("prompt", msg.channel).replace("$botnick", irc.nick)
             context_lines = self.registryValue("context_lines", msg.channel)
             context = ""
-
+            
             if context_lines > 0:
                 try:
                     import os
@@ -46,13 +76,13 @@ class Pollinations(callbacks.Plugin):
                     network = irc.network
                     channel_lower = channel.lower()
                     test_path = os.path.join(log_dir, "ChannelLogger", network, channel_lower, f"{channel_lower}.log")
-
+                    
                     if os.path.exists(test_path):
                         with open(test_path, 'r', encoding='utf-8', errors='ignore') as f:
                             lines = f.readlines()
                             recent_lines = lines[-context_lines-1:-1]
                             chat_lines = []
-
+                            
                             for line in recent_lines:
                                 if '<' in line and '>' in line:
                                     try:
@@ -64,29 +94,29 @@ class Pollinations(callbacks.Plugin):
                                                 chat_lines.append(f"{nick_part}: {message_part}")
                                     except:
                                         continue
-
+                            
                             context = "\n".join(chat_lines[-context_lines:])
                 except Exception as e:
                     pass
-
+                    
             if context:
                 full_prompt = f"{prompt}\n\nRecent conversation:\n{context}\n\nUser: {text}\nAssistant:"
             else:
                 full_prompt = f"{prompt}\n\nUser: {text}\nAssistant:"
-
+                
             response = requests.get(
                 f"https://text.pollinations.ai/{requests.utils.quote(full_prompt)}",
                 timeout=45
             )
-
+            
             if response.status_code == 200:
                 content = response.text.strip()
-
+                
                 if self.registryValue("nick_strip", msg.channel):
                     content = re.sub(r"^%s: " % (irc.nick), "", content)
-
+                    
                 prefix = self.registryValue("nick_prefix", msg.channel)
-
+                
                 if self.registryValue("reply_intact", msg.channel):
                     for line in content.splitlines():
                         if line:
@@ -96,11 +126,9 @@ class Pollinations(callbacks.Plugin):
                     irc.reply(response_text, prefixNick=prefix)
             else:
                 irc.reply(f"Error: {response.status_code}")
-
+                
         except Exception as e:
             irc.reply(f"Error: {str(e)}")
-
-    chat = wrap(chat, ["text"])
 
     def image(self, irc, msg, args, text):
         """Generate image from text prompt using Pollinations.ai"""
