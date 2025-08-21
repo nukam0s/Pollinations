@@ -25,7 +25,11 @@ class Pollinations(callbacks.Plugin):
         channel = msg.channel
         if not irc.isChannel(channel):
             channel = msg.nick
-
+        
+        if not text.strip():
+            irc.reply("Please provide a prompt")
+            return
+    
         try:
             if self.registryValue("nick_include", msg.channel):
                 text = "%s: %s" % (msg.nick, text)
@@ -40,7 +44,6 @@ class Pollinations(callbacks.Plugin):
                     from supybot import conf
                     log_dir = conf.supybot.directories.log()
                     network = irc.network
-                    # Converter para minúsculas para comparação
                     channel_lower = channel.lower()
                     test_path = os.path.join(log_dir, "ChannelLogger", network, channel_lower, f"{channel_lower}.log")
 
@@ -64,7 +67,7 @@ class Pollinations(callbacks.Plugin):
 
                             context = "\n".join(chat_lines[-context_lines:])
                 except Exception as e:
-                    pass  # Falha silenciosa se não conseguir ler logs
+                    pass
 
             if context:
                 full_prompt = f"{prompt}\n\nRecent conversation:\n{context}\n\nUser: {text}\nAssistant:"
@@ -73,7 +76,7 @@ class Pollinations(callbacks.Plugin):
 
             response = requests.get(
                 f"https://text.pollinations.ai/{requests.utils.quote(full_prompt)}",
-                timeout=30
+                timeout=45
             )
 
             if response.status_code == 200:
@@ -101,6 +104,11 @@ class Pollinations(callbacks.Plugin):
 
     def image(self, irc, msg, args, text):
         """Generate image from text prompt using Pollinations.ai"""
+        
+        if not text.strip():
+            irc.reply("Please provide a prompt")
+            return
+        
         width = self.registryValue("image_width", msg.channel)
         height = self.registryValue("image_height", msg.channel) 
         model = self.registryValue("image_model", msg.channel)
