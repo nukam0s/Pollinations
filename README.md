@@ -6,6 +6,7 @@ A Limnoria IRC bot plugin that integrates with [Pollinations.ai](https://pollina
 
 - **Text Generation**: Generate AI responses using chat context
 - **Image Generation**: Create images from text prompts
+- **Auto-Reply**: Automatically respond to trigger words in channel
 - **Context Awareness**: Uses recent channel conversation for better responses
 - **Highly Configurable**: Multiple settings for customization
 - **URL Shortening**: Optional shortened URLs for generated images
@@ -56,12 +57,20 @@ All settings can be configured per-channel using:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `prompt` | "You are a helpful AI assistant in an IRC channel." | System prompt for the AI |
-| `context_lines` | 10 | Number of recent messages to include as context |
+| `prompt` | "You are $botnick the IRC bot. Be brief, helpful" | System prompt for the AI ($botnick = bot's nickname) |
+| `context_lines` | 50 | Number of recent messages to include as context |
 | `nick_include` | True | Include user's nickname in the prompt |
 | `nick_strip` | True | Remove bot's nickname from responses |
-| `nick_prefix` | True | Prefix responses with user's nickname |
+| `nick_prefix` | False | Prefix responses with user's nickname |
 | `reply_intact` | False | Send multi-line responses as separate messages |
+
+### Auto-Reply Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `auto_reply` | False | Enable automatic replies to trigger words |
+| `trigger_words` | [] | List of words that trigger auto-reply (space-separated) |
+| `trigger_probability` | 1.0 | Probability (0.0-1.0) of responding to trigger words |
 
 ### Image Generation Settings
 
@@ -72,8 +81,8 @@ All settings can be configured per-channel using:
 | `image_model` | "flux" | AI model to use for generation |
 | `image_enhance` | True | Enable image enhancement |
 | `image_nologo` | True | Remove Pollinations watermark |
-| `image_private` | False | Make images private |
-| `image_safe` | True | Enable safe content filtering |
+| `image_private` | True | Make images private |
+| `image_safe` | False | Enable safe content filtering |
 | `negative_prompt` | "" | What to avoid in generated images |
 | `shorten_urls` | True | Use is.gd to shorten image URLs |
 
@@ -83,6 +92,21 @@ All settings can be configured per-channel using:
 ```
 /msg yourbot config channel #mychannel plugins.Pollinations.prompt "You are a friendly bot assistant."
 /msg yourbot config channel #mychannel plugins.Pollinations.context_lines 5
+```
+
+### Auto-Reply Setup
+```
+# Enable auto-reply
+/msg yourbot config channel #mychannel plugins.Pollinations.auto_reply True
+
+# Set trigger words (bot will respond when these words appear in messages)
+/msg yourbot config channel #mychannel plugins.Pollinations.trigger_words "bot help ai assistant"
+
+# Set probability (50% chance to respond)
+/msg yourbot config channel #mychannel plugins.Pollinations.trigger_probability 0.5
+
+# Use bot's nickname as trigger word
+/msg yourbot config channel #mychannel plugins.Pollinations.trigger_words "$botnick help ai"
 ```
 
 ### Image Settings
@@ -104,6 +128,13 @@ All settings can be configured per-channel using:
 2. Combines system prompt + context + user input
 3. Sends request to Pollinations.ai text API
 4. Returns formatted response to channel
+
+### Auto-Reply Feature
+1. Monitors all channel messages for configured trigger words
+2. When a trigger word is detected, automatically calls the chat function
+3. Uses the entire message as input (not just the trigger word)
+4. Respects probability setting to avoid spam
+5. Supports `$botnick` placeholder to use bot's actual nickname
 
 ### Image Generation
 1. Takes user prompt and combines with configured parameters
@@ -138,9 +169,14 @@ No API key required - completely free to use!
 - Try a more detailed prompt
 - Check if the prompt might be filtered by safety settings
 
-**Timeout errors**
-- The API might be slow or unavailable
-- Try again in a few moments
+**Auto-reply not working**
+- Ensure `auto_reply` is set to `True`
+- Check that `trigger_words` is properly configured
+- Verify `trigger_probability` is > 0.0
+- Make sure the trigger word appears in the message
+
+**Bot responds to its own messages**
+- This shouldn't happen (built-in protection), but if it does, check logs
 
 **Context not working**
 - Ensure ChannelLogger plugin is enabled
