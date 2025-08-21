@@ -148,7 +148,7 @@ class Pollinations(callbacks.Plugin):
                         except:
                             pass
 
-                    irc.reply(f"🖼️ {final_url}")
+                    irc.reply(f"{final_url}")
                 else:
                     irc.reply("Generated blank image, try different prompt")
             else:
