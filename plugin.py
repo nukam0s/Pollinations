@@ -7,6 +7,7 @@ import base64
 import tempfile
 import os
 import random
+import time
 from supybot import conf
 import glob
 
@@ -45,90 +46,134 @@ class Pollinations(callbacks.Plugin):
                     break
     
     def chat(self, irc, msg, args, text):
-        """Generate text using Pollinations.ai API"""
-        self._do_chat(irc, msg, text)
-
-    chat = wrap(chat, ["text"])
-
-    def _do_chat(self, irc, msg, text):
-        """Internal chat processing"""
+        """Generate text using Pollinations.ai API with retry logic"""
         channel = msg.channel
         if not irc.isChannel(channel):
             channel = msg.nick
-        
-        if not text.strip():
-            irc.reply("Please provide a prompt")
-            return
-            
-        try:
-            if self.registryValue("nick_include", msg.channel):
-                text = "%s: %s" % (msg.nick, text)
-                
-            prompt = self.registryValue("prompt", msg.channel).replace("$botnick", irc.nick)
-            context_lines = self.registryValue("context_lines", msg.channel)
-            context = ""
-            
-            if context_lines > 0:
-                try:
-                    import os
-                    from supybot import conf
-                    log_dir = conf.supybot.directories.log()
-                    network = irc.network
-                    channel_lower = channel.lower()
-                    test_path = os.path.join(log_dir, "ChannelLogger", network, channel_lower, f"{channel_lower}.log")
-                    
-                    if os.path.exists(test_path):
-                        with open(test_path, 'r', encoding='utf-8', errors='ignore') as f:
-                            lines = f.readlines()
-                            recent_lines = lines[-context_lines-1:-1]
-                            chat_lines = []
-                            
-                            for line in recent_lines:
-                                if '<' in line and '>' in line:
-                                    try:
-                                        parts = line.split('>', 1)
-                                        if len(parts) == 2:
-                                            nick_part = parts[0].split('<')[-1]
-                                            message_part = parts[1].strip()
-                                            if nick_part and message_part:
-                                                chat_lines.append(f"{nick_part}: {message_part}")
-                                    except:
-                                        continue
-                            
-                            context = "\n".join(chat_lines[-context_lines:])
-                except Exception as e:
-                    pass
-                    
-            if context:
-                full_prompt = f"{prompt}\n\nRecent conversation:\n{context}\n\nUser: {text}\nAssistant:"
-            else:
-                full_prompt = f"{prompt}\n\nUser: {text}\nAssistant:"
-                
-            response = requests.get(
-                f"https://text.pollinations.ai/{requests.utils.quote(full_prompt)}",
-                timeout=45
-            )
-            
-            if response.status_code == 200:
-                content = response.text.strip()
-                
-                if self.registryValue("nick_strip", msg.channel):
-                    content = re.sub(r"^%s: " % (irc.nick), "", content)
-                    
-                prefix = self.registryValue("nick_prefix", msg.channel)
-                
-                if self.registryValue("reply_intact", msg.channel):
-                    for line in content.splitlines():
-                        if line:
-                            irc.reply(line, prefixNick=prefix)
+
+        max_retries = 3
+        retry_delay = 2  # segundos
+
+        for attempt in range(max_retries):
+            try:
+                if self.registryValue("nick_include", msg.channel):
+                    text = "%s: %s" % (msg.nick, text)
+
+                prompt = self.registryValue("prompt", msg.channel).replace("$botnick", irc.nick)
+                context_lines = self.registryValue("context_lines", msg.channel)
+                context = ""
+
+                if context_lines > 0:
+                    try:
+                        import os
+                        from supybot import conf
+                        log_dir = conf.supybot.directories.log()
+                        network = irc.network
+                        channel_lower = channel.lower()
+                        test_path = os.path.join(log_dir, "ChannelLogger", network, channel_lower, f"{channel_lower}.log")
+
+                        if os.path.exists(test_path):
+                            with open(test_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                lines = f.readlines()
+                                recent_lines = lines[-context_lines-1:-1]
+                                chat_lines = []
+
+                                for line in recent_lines:
+                                    if '<' in line and '>' in line:
+                                        try:
+                                            parts = line.split('>', 1)
+                                            if len(parts) == 2:
+                                                nick_part = parts[0].split('<')[-1]
+                                                message_part = parts[1].strip()
+                                                if nick_part and message_part:
+                                                    chat_lines.append(f"{nick_part}: {message_part}")
+                                        except:
+                                            continue
+
+                                context = "\n".join(chat_lines[-context_lines:])
+                    except Exception as e:
+                        pass  # Falha silenciosa se não conseguir ler logs
+
+                if context:
+                    full_prompt = f"{prompt}\n\nRecent conversation:\n{context}\n\nUser: {text}\nAssistant:"
                 else:
-                    response_text = " ".join(content.splitlines())
-                    irc.reply(response_text, prefixNick=prefix)
-            else:
-                irc.reply(f"Error: {response.status_code}")
-                
-        except Exception as e:
-            irc.reply(f"Error: {str(e)}")
+                    full_prompt = f"{prompt}\n\nUser: {text}\nAssistant:"
+
+                response = requests.get(
+                    f"https://text.pollinations.ai/{requests.utils.quote(full_prompt)}",
+                    timeout=15  # timeout menor
+                )
+
+                if response.status_code == 200:
+                    content = response.text.strip()
+
+                    # Verifica se a resposta não está vazia
+                    if not content or len(content.strip()) < 3:
+                        if attempt < max_retries - 1:
+                            time.sleep(retry_delay)
+                            continue
+                        else:
+                            irc.reply("🤖 Pollinations is having issues, try again later")
+                            return
+
+                    if self.registryValue("nick_strip", msg.channel):
+                        content = re.sub(r"^%s: " % (irc.nick), "", content)
+
+                    prefix = self.registryValue("nick_prefix", msg.channel)
+
+                    if self.registryValue("reply_intact", msg.channel):
+                        for line in content.splitlines():
+                            if line:
+                                irc.reply(line, prefixNick=prefix)
+                    else:
+                        response_text = " ".join(content.splitlines())
+                        irc.reply(response_text, prefixNick=prefix)
+                    return  # Sucesso, sair do loop
+
+                elif response.status_code == 502:
+                    # Erro 502 específico - tentar novamente
+                    if attempt < max_retries - 1:
+                        # Mostra que está a tentar novamente apenas na primeira tentativa
+                        if attempt == 0:
+                            irc.reply(f"🔄 Pollinations is busy, retrying... ({attempt + 1}/{max_retries})")
+                        time.sleep(retry_delay * (attempt + 1))  # Backoff exponencial
+                        continue
+                    else:
+                        irc.reply("⚠️ Pollinations API is temporarily unavailable (502). Try again in a few minutes.")
+                        return
+
+                else:
+                    # Outros erros HTTP
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        irc.reply(f"❌ API Error {response.status_code}. Try again later.")
+                        return
+
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    if attempt == 0:
+                        irc.reply(f"⏱️ Request timeout, retrying... ({attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    irc.reply("⏱️ Request timed out. Pollinations might be slow right now.")
+                    return
+
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    irc.reply(f"🔌 Network error: {str(e)}")
+                    return
+
+            except Exception as e:
+                irc.reply(f"❌ Unexpected error: {str(e)}")
+                return
+
+    chat = wrap(chat, ["text"])
 
     def image(self, irc, msg, args, text):
         """Generate image from text prompt using Pollinations.ai"""
