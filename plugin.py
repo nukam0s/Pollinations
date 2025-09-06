@@ -42,7 +42,7 @@ class Pollinations(callbacks.Plugin):
             if processed_word in message:
                 probability = self.registryValue("trigger_probability", msg.channel)
                 if random.random() <= probability:
-                    self._do_chat(irc, msg, msg.args[1])
+                    self.chat(irc, msg, [], msg.args[1])
                     break
     
     def chat(self, irc, msg, args, text):
