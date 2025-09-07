@@ -1,4 +1,4 @@
-from supybot import utils, plugins, ircutils, callbacks
+from supybot import utils, plugins, ircutils, callbacks, conf
 from supybot.commands import *
 from supybot.i18n import PluginInternationalization
 import re
@@ -29,18 +29,20 @@ class Pollinations(callbacks.Plugin):
         if not trigger_words:
             return
 
-        message = msg.args[1].lower()
+        message = msg.args[1]
 
         for word in trigger_words:
-            processed_word = word.replace("$botnick", irc.nick).lower()
-            if processed_word in message:
+            # Substitui underscores por espaços e $botnick pelo nick real
+            processed_word = word.replace("_", " ").replace("$botnick", irc.nick)
+            # Regex com limites de palavra/frase
+            pattern = rf"\b{re.escape(processed_word)}\b"
+            if re.search(pattern, message, re.IGNORECASE):
                 probability = self.registryValue("trigger_probability", msg.channel)
                 if random.random() <= probability:
-                    text = msg.args[1]
+                    text = message
                     prefix = irc.nick + " "
                     if text.lower().startswith(prefix.lower()):
                         text = text[len(prefix):].strip()
-                    # chamar a versão interna que não depende de wrap
                     self._chat(irc, msg, text)
                     break
 
