@@ -69,7 +69,7 @@ All settings can be configured per-channel using:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `auto_reply` | False | Enable automatic replies to trigger words |
-| `trigger_words` | [] | List of words that trigger auto-reply (space-separated) |
+| `trigger_words` | [] | List of words that trigger auto-reply (space-separated) also can use underscore for sentences (good_morning) |
 | `trigger_probability` | 1.0 | Probability (0.0-1.0) of responding to trigger words |
 
 ### Image Generation Settings
