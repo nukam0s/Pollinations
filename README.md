@@ -40,7 +40,7 @@ All settings can be configured per-channel using:
 ### Text Generation Settings
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `prompt` | "You are $botnick the IRC bot. Be brief, helpful" | System prompt for the AI ($botnick = bot's nickname) |
+| `prompt` | "You are $botnick the #channel bot. Be nice and helpfull" | System prompt for the AI ($botnick = bot's nickname) |
 | `context_lines` | 50 | Number of recent messages to include as context |
 | `nick_include` | True | Include user's nickname in the prompt |
 | `nick_strip` | True | Remove bot's nickname from responses |
