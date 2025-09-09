@@ -24,18 +24,27 @@ class Pollinations(callbacks.Plugin):
             return
         if msg.nick == irc.nick:
             return
-
         trigger_words = self.registryValue("trigger_words", msg.channel)
         if not trigger_words:
             return
-
         message = msg.args[1]
 
         for word in trigger_words:
-            # Substitui underscores por espaços e $botnick pelo nick real
+            # Substitui underscores por espaços e $botnick pelo nick do bot
             processed_word = word.replace("_", " ").replace("$botnick", irc.nick)
-            # Regex com limites de palavra/frase
-            pattern = rf"\b{re.escape(processed_word)}\b"
+            regex_pattern = re.escape(processed_word).replace(r'\*', '.*')
+
+            if word.startswith('*') and word.endswith('*'):
+                # Match em qualquer parte da mensagem (remove os curingas que viraram '.*')
+                pattern = regex_pattern[2:-2]  # remover os .* do início e fim
+            elif word.endswith('*'):
+                # Match no início da mensagem (remove o curingas final)
+                base = regex_pattern[:-2]
+                pattern = rf'^{base}\b.*'
+            else:
+                # Match exato da mensagem inteira
+                pattern = rf'^{regex_pattern}$'
+
             if re.search(pattern, message, re.IGNORECASE):
                 probability = self.registryValue("trigger_probability", msg.channel)
                 if random.random() <= probability:
@@ -45,6 +54,7 @@ class Pollinations(callbacks.Plugin):
                         text = text[len(prefix):].strip()
                     self._chat(irc, msg, text)
                     break
+
 
     def _chat(self, irc, msg, text):
         """Internal helper for Pollinations text generation"""
