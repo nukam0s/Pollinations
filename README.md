@@ -55,12 +55,14 @@ All settings can be configured per-channel using:
 | `trigger_probability` | 1.0 | Probability (0.0-1.0) of responding to trigger words |
 
 #### Trigger Words Wildcard Logic
-- `bom_dia`  
-  Matches **only** when the message is exactly “bom dia”
-- `bom_dia*`  
-  Matches messages **starting** with “bom dia”, e.g., “bom dia a todos”
-- `*bom_dia*`  
-  Matches messages containing “bom dia” anywhere, e.g., “olá bom dia a todos”
+- `good_morning`  
+  Matches **only** when the message is exactly “good morning”
+- `good_morning*`  
+  Matches messages **starting** with “good morning”, e.g., “good morning all”
+- `*good_morning*`  
+  Matches messages containing “good morning” anywhere, e.g., “hello good morning everyone”
+- `*$botnick*`  
+  Matches messages containing the bot nickname anywhere
 
 ### Image Generation Settings
 | Setting | Default | Description |
