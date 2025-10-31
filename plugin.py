@@ -29,19 +29,21 @@ class Pollinations(callbacks.Plugin):
             return
         message = msg.args[1]
         for word in trigger_words:
-            # Substitui underscores por espaços e $botnick pelo nick do bot
             processed_word = word.replace("_", " ").replace("$botnick", irc.nick)
-            regex_pattern = re.escape(processed_word).replace(r'\*', '.*')
+            
             if word.startswith('*') and word.endswith('*'):
-                # Match em qualquer parte da mensagem (remove os curingas que viraram '.*')
-                pattern = regex_pattern[2:-2]  # remover os .* do início e fim
+                # Match em qualquer parte: *palavra*
+                pattern = re.escape(processed_word.strip('*'))
             elif word.endswith('*'):
-                # Match no início da mensagem (remove o curingas final)
-                base = regex_pattern[:-2]
-                pattern = rf'^{base}\b.*'
+                # Match no início: palavra*
+                pattern = r'^' + re.escape(processed_word.rstrip('*'))
+            elif word.startswith('*'):
+                # Match no fim: *palavra
+                pattern = re.escape(processed_word.lstrip('*')) + r'$'
             else:
-                # Match exato da mensagem inteira
-                pattern = rf'^{regex_pattern}$'
+                # Match exato
+                pattern = r'^' + re.escape(processed_word) + r'$'
+            
             if re.search(pattern, message, re.IGNORECASE):
                 probability = self.registryValue("trigger_probability", msg.channel)
                 if random.random() <= probability:
@@ -101,7 +103,7 @@ class Pollinations(callbacks.Plugin):
 
                 response = requests.get(
                     f"https://text.pollinations.ai/{requests.utils.quote(full_prompt)}",
-                    timeout=15
+                    timeout=30
                 )
 
                 if response.status_code == 200:
@@ -175,7 +177,7 @@ class Pollinations(callbacks.Plugin):
         if not text.strip():
             irc.reply("Please provide a prompt")
             return
-
+        
         width = self.registryValue("image_width", msg.channel)
         height = self.registryValue("image_height", msg.channel)
         model = self.registryValue("image_model", msg.channel)
@@ -185,9 +187,9 @@ class Pollinations(callbacks.Plugin):
         safe = self.registryValue("image_safe", msg.channel)
         negative_prompt = self.registryValue("negative_prompt", msg.channel)
         shorten_urls = self.registryValue("shorten_urls", msg.channel)
-
+        
         seed = random.randint(1, 1000000)
-
+        
         params = {
             "width": width,
             "height": height,
@@ -198,35 +200,42 @@ class Pollinations(callbacks.Plugin):
             "private": str(private).lower(),
             "safe": str(safe).lower(),
         }
-
+        
         if negative_prompt.strip():
             params["negative_prompt"] = negative_prompt
-
+        
         param_string = "&".join([f"{k}={requests.utils.quote(str(v))}" for k, v in params.items()])
-        image_url = f"https://pollinations.ai/p/{requests.utils.quote(text)}?{param_string}"
-
+        image_url = f"https://image.pollinations.ai/prompt/{requests.utils.quote(text)}?{param_string}"
+        
         try:
-            response = requests.get(image_url, timeout=20)
+            self.log.info(f"Requesting image URL: {image_url[:150]}...")
+            response = requests.get(image_url, timeout=60, allow_redirects=True)
+            self.log.info(f"Response status: {response.status_code}, Content-Type: {response.headers.get('Content-Type', 'unknown')}")
+            
             if response.status_code == 200:
                 content_type = response.headers.get("Content-Type", "")
                 if content_type.startswith("image/"):
-                    final_url = image_url
+                    final_url = response.url  # URL final após redirects
                     if shorten_urls:
                         try:
                             shorten_response = requests.post(
                                 "https://is.gd/create.php",
-                                data={"format": "simple", "url": image_url},
+                                data={"format": "simple", "url": final_url},
                                 timeout=10,
                             )
                             if shorten_response.status_code == 200:
                                 final_url = shorten_response.text.strip()
-                        except:
-                            pass
+                        except Exception as e:
+                            self.log.warning(f"URL shortener failed: {e}")
                     irc.reply(final_url)
                 else:
                     irc.reply("Generated invalid image, try different prompt")
             else:
                 irc.reply(f"Error: {response.status_code}")
+        except requests.exceptions.Timeout:
+            irc.reply("Request timed out")
+        except requests.exceptions.RequestException as e:
+            irc.reply(f"Network error: {str(e)}")
         except Exception as e:
             irc.reply(f"Error: {str(e)}")
 
