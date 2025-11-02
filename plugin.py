@@ -6,6 +6,8 @@ import requests
 import random
 import time
 import os
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 _ = PluginInternationalization("Pollinations")
 
@@ -16,6 +18,16 @@ class Pollinations(callbacks.Plugin):
     def __init__(self, irc):
         self.__parent = super(Pollinations, self)
         self.__parent.__init__(irc)
+        # Criar session HTTP reutilizável
+        self.session = requests.Session()
+        retry_strategy = Retry(
+            total=2,
+            backoff_factor=1,
+            status_forcelist=[502, 503, 504]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=10)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
 
     def doPrivmsg(self, irc, msg):
         if not irc.isChannel(msg.channel):
@@ -101,9 +113,9 @@ class Pollinations(callbacks.Plugin):
                 else:
                     full_prompt = f"{prompt}\n\nUser: {text}\nAssistant:"
 
-                response = requests.get(
+                response = self.session.get(
                     f"https://text.pollinations.ai/{requests.utils.quote(full_prompt)}",
-                    timeout=30
+                    timeout=20
                 )
 
                 if response.status_code == 200:
@@ -209,7 +221,7 @@ class Pollinations(callbacks.Plugin):
         
         try:
             self.log.info(f"Requesting image URL: {image_url[:150]}...")
-            response = requests.get(image_url, timeout=60, allow_redirects=True)
+            response = self.session.get(image_url, timeout=25, allow_redirects=True)
             self.log.info(f"Response status: {response.status_code}, Content-Type: {response.headers.get('Content-Type', 'unknown')}")
             
             if response.status_code == 200:
@@ -218,7 +230,7 @@ class Pollinations(callbacks.Plugin):
                     final_url = response.url  # URL final após redirects
                     if shorten_urls:
                         try:
-                            shorten_response = requests.post(
+                            shorten_response = self.session.post(
                                 "https://is.gd/create.php",
                                 data={"format": "simple", "url": final_url},
                                 timeout=10,
