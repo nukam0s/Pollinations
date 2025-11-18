@@ -18,7 +18,6 @@ def configure(advanced):
 
 Pollinations = conf.registerPlugin("Pollinations")
 
-# Text generation configuration
 conf.registerChannelValue(
     Pollinations,
     "prompt",
@@ -29,6 +28,16 @@ conf.registerChannelValue(
             The prompt defining your bot's personality.
             """
         ),
+    ),
+)
+
+conf.registerChannelValue(
+    Pollinations,
+    "api_token",
+    registry.String(
+        "",  
+        _("""Pollinations.ai API token (x-enter-token). Leave empty for anonymous access."""),
+        private=True,
     ),
 )
 
@@ -88,16 +97,8 @@ conf.registerChannelValue(
     Pollinations,
     "text_model",
     registry.String(
-        "openai",  # Valor padrão
-        _(
-            """
-            Text generation model. 
-            
-            Available models include:
-            deepseek, gemini, gemini-search, mistral, openai(default), openai-fast, openai-large, openai-reasoning, qwen-coder, roblox-rp, bidara, chickytutor, evil, midijourney, rtist, unity.
-            (Note: openai-audio supports text-to-audio, but this command only handles text output.)
-            """
-        ),
+        "openai",
+        _("""Tier Anonymous (Free/Safe): openai(Default), openai-fast, bidara, midijourney. Tier Seed (Advanced/Quota): mistral, gemini, deepseek, openai-large, roblox-rp, unity, evil. Flower: qwen-coder."""),
     ),
 )
 
@@ -224,7 +225,7 @@ conf.registerChannelValue(
     Pollinations,
     "text_timeout",
     registry.Integer(
-        8,
+        20,
         _("""Timeout (s) for text generation requests"""),
     ),
 )

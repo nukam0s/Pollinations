@@ -23,7 +23,7 @@ class Pollinations(callbacks.Plugin):
         self.__parent = super(Pollinations, self)
         self.__parent.__init__(irc)
         self.session = requests.Session()
-        retry_strategy = Retry(total=2, backoff_factor=1, status_forcelist=[502, 503, 504])
+        retry_strategy = Retry(total=4, backoff_factor=1, status_forcelist=[502, 503, 504])
         adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=10)
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
@@ -97,23 +97,18 @@ class Pollinations(callbacks.Plugin):
     
     @staticmethod
     def tail_lines(path, n):
-        """Lê últimas N linhas de forma eficiente"""
         try:
             with open(path, "rb") as f:
-                # Vai para o fim
                 f.seek(0, 2)
                 size = f.tell()
-                
-                # Estima 150 bytes por linha (média IRC)
+
                 block_size = n * 150
                 
                 if size < block_size:
-                    # Ficheiro pequeno, lê tudo
                     f.seek(0)
                 else:
-                    # Lê só o necessário
                     f.seek(size - block_size)
-                    f.readline()  # descarta linha parcial
+                    f.readline()  
                 
                 lines = [line.decode("utf-8", errors="ignore").rstrip() for line in f]
                 return lines[-n:] if len(lines) > n else lines
@@ -121,7 +116,6 @@ class Pollinations(callbacks.Plugin):
             return []
     
     def _read_context(self, irc, channel, context_lines):
-        """Lê contexto do log do canal"""
         try:
             log_dir = conf.supybot.directories.log()
             network = irc.network
@@ -159,17 +153,14 @@ class Pollinations(callbacks.Plugin):
                 cache_key = msg.channel
                 now = time.time()
                 
-                # Verifica cache
                 if cache_key in self.context_cache:
                     cached_time, cached_context = self.context_cache[cache_key]
                     if now - cached_time < self.context_cache_ttl:
                         context = cached_context
                     else:
-                        # Cache expirado, lê novamente
                         context = self._read_context(irc, channel, context_lines)
                         self.context_cache[cache_key] = (now, context)
                 else:
-                    # Primeira vez, lê e guarda
                     context = self._read_context(irc, channel, context_lines)
                     self.context_cache[cache_key] = (now, context)
             
@@ -178,15 +169,19 @@ class Pollinations(callbacks.Plugin):
             else:
                 full_prompt = f"{prompt}\n\nUser: {text}\nAssistant:"
             
-            timeout = self.registryValue("text_timeout", msg.channel)
-            # --> NOVO: Obtém o modelo de texto do registro
+            timeout = self.registryValue("text_timeout", msg.channel) 
             text_model = self.registryValue("text_model", msg.channel) 
-            
-            quoted_prompt = requests.utils.quote(full_prompt, safe='') # Use safe='' para codificar todos os caracteres não-URL-safe
-            
-            # --> MODIFICADO: Constrói a URL da API incluindo o parâmetro 'model'
-            api_url = f"https://text.pollinations.ai/{requests.utils.quote(full_prompt)}?model={requests.utils.quote(text_model)}"
+            api_token = self.registryValue("api_token", msg.channel) 
 
+            quoted_prompt = requests.utils.quote(full_prompt, safe='')
+            
+            api_url = f"https://text.pollinations.ai/{quoted_prompt}?model={requests.utils.quote(text_model)}"
+
+
+            if api_token:
+                api_url += f"&token={requests.utils.quote(api_token)}" 
+
+            
             response = self.session.get(
                 api_url,
                 timeout=timeout
@@ -195,7 +190,6 @@ class Pollinations(callbacks.Plugin):
             if response.status_code == 200:
                 content = response.text.strip()
                 if not content or len(content) < 3:
-                    # CORRIGIDO: usa 'channel'
                     irc.queueMsg(ircmsgs.privmsg(channel, "Pollinations returned empty response")) 
                     return
                 
@@ -207,33 +201,27 @@ class Pollinations(callbacks.Plugin):
                     for line in content.splitlines():
                         if line:
                             text = f"{msg.nick}: {line}" if prefix else line
-                            # CORRIGIDO: usa 'channel'
                             irc.queueMsg(ircmsgs.privmsg(channel, text))
                 else:
                     response_text = " ".join(content.splitlines())
                     text = f"{msg.nick}: {response_text}" if prefix else response_text
-                    # CORRIGIDO: usa 'channel'
                     irc.queueMsg(ircmsgs.privmsg(channel, text))
                 
                 self.last_reply_time[msg.channel] = time.time()
                 return
             else:
-                # CORRIGIDO: usa 'channel'
                 irc.queueMsg(ircmsgs.privmsg(channel, f"API Error {response.status_code}"))
                 return
         
         except requests.exceptions.Timeout:
-            # CORRIGIDO: usa 'channel'
             irc.queueMsg(ircmsgs.privmsg(channel, "Request timed out."))
             return
         except requests.exceptions.RequestException as e:
             self.log.warning(f"Network error: {repr(e)}")
-            # CORRIGIDO: usa 'channel'
             irc.queueMsg(ircmsgs.privmsg(channel, "Network error."))
             return
         except Exception as e:
             self.log.error(f"Unexpected error in _chat: {repr(e)}")
-            # CORRIGIDO: usa 'channel'
             irc.queueMsg(ircmsgs.privmsg(channel, "Unexpected error."))
             return
 
