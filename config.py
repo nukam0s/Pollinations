@@ -86,6 +86,23 @@ conf.registerChannelValue(
 
 conf.registerChannelValue(
     Pollinations,
+    "text_model",
+    registry.String(
+        "openai",  # Valor padrão
+        _(
+            """
+            Text generation model. 
+            
+            Available models include:
+            deepseek, gemini, gemini-search (default), mistral, openai, openai-fast, openai-large, openai-reasoning, qwen-coder, roblox-rp, bidara, chickytutor, evil, midijourney, rtist, unity.
+            (Note: openai-audio supports text-to-audio, but this command only handles text output.)
+            """
+        ),
+    ),
+)
+
+conf.registerChannelValue(
+    Pollinations,
     "context_lines",
     registry.Integer(
         50,
@@ -200,6 +217,24 @@ conf.registerChannelValue(
     registry.Float(
         1.0,
         _("""Probability (0.0-1.0) of responding to trigger words"""),
+    ),
+)
+
+conf.registerChannelValue(
+    Pollinations,
+    "text_timeout",
+    registry.Integer(
+        8,
+        _("""Timeout (s) for text generation requests"""),
+    ),
+)
+
+conf.registerChannelValue(
+    Pollinations,
+    "min_reply_interval",
+    registry.Integer(
+        6,
+        _("""Minimum seconds between automatic replies in a channel"""),
     ),
 )
 
