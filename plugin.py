@@ -182,6 +182,8 @@ class Pollinations(callbacks.Plugin):
             # --> NOVO: Obtém o modelo de texto do registro
             text_model = self.registryValue("text_model", msg.channel) 
             
+            quoted_prompt = requests.utils.quote(full_prompt, safe='') # Use safe='' para codificar todos os caracteres não-URL-safe
+            
             # --> MODIFICADO: Constrói a URL da API incluindo o parâmetro 'model'
             api_url = f"https://text.pollinations.ai/{requests.utils.quote(full_prompt)}?model={requests.utils.quote(text_model)}"
 
