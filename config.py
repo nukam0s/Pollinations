@@ -94,7 +94,7 @@ conf.registerChannelValue(
             Text generation model. 
             
             Available models include:
-            deepseek, gemini, gemini-search (default), mistral, openai, openai-fast, openai-large, openai-reasoning, qwen-coder, roblox-rp, bidara, chickytutor, evil, midijourney, rtist, unity.
+            deepseek, gemini, gemini-search, mistral, openai(default), openai-fast, openai-large, openai-reasoning, qwen-coder, roblox-rp, bidara, chickytutor, evil, midijourney, rtist, unity.
             (Note: openai-audio supports text-to-audio, but this command only handles text output.)
             """
         ),
