@@ -190,7 +190,7 @@ class Pollinations(callbacks.Plugin):
             if response.status_code == 200:
                 content = response.text.strip()
                 if not content or len(content) < 3:
-                    irc.queueMsg(ircmsgs.privmsg(channel, "Pollinations returned empty response")) 
+                    irc.reply("Pollinations returned empty response", prefixNick=False)
                     return
                 
                 if self.registryValue("nick_strip", msg.channel):
@@ -205,24 +205,24 @@ class Pollinations(callbacks.Plugin):
                 else:
                     response_text = " ".join(content.splitlines())
                     text = f"{msg.nick}: {response_text}" if prefix else response_text
-                    irc.queueMsg(ircmsgs.privmsg(channel, text))
+                    irc.reply(text, prefixNick=False, to=channel)
                 
                 self.last_reply_time[msg.channel] = time.time()
                 return
             else:
-                irc.queueMsg(ircmsgs.privmsg(channel, f"API Error {response.status_code}"))
+                irc.reply(f"API Error {response.status_code}", prefixNick=False)
                 return
         
         except requests.exceptions.Timeout:
-            irc.queueMsg(ircmsgs.privmsg(channel, "Request timed out."))
+            irc.reply("Request timed out.", prefixNick=False)
             return
         except requests.exceptions.RequestException as e:
             self.log.warning(f"Network error: {repr(e)}")
-            irc.queueMsg(ircmsgs.privmsg(channel, "Network error."))
+            irc.reply("Network error.", prefixNick=False)
             return
         except Exception as e:
             self.log.error(f"Unexpected error in _chat: {repr(e)}")
-            irc.queueMsg(ircmsgs.privmsg(channel, "Unexpected error."))
+            irc.reply("Unexpected error.", prefixNick=False)
             return
 
     def chat(self, irc, msg, args, text):
@@ -234,7 +234,7 @@ class Pollinations(callbacks.Plugin):
     def image(self, irc, msg, args, text):
         """Generate image from text prompt using Pollinations.ai"""
         if not text.strip():
-            irc.queueMsg(ircmsgs.privmsg(msg.channel, "Please provide a prompt"))
+            irc.reply("Please provide a prompt", prefixNick=False)
             return
         
         width = self.registryValue("image_width", msg.channel)
@@ -286,19 +286,19 @@ class Pollinations(callbacks.Plugin):
                                 final_url = shorten_response.text.strip()
                         except Exception as e:
                             self.log.warning(f"URL shortener failed: {e}")
-                    irc.queueMsg(ircmsgs.privmsg(msg.channel, final_url))
+                    irc.reply(final_url, prefixNick=False)
                 else:
-                    irc.queueMsg(ircmsgs.privmsg(msg.channel, "Generated invalid image, try different prompt"))
+                    irc.reply("Generated invalid image, try different prompt", prefixNick=False)
             else:
-                irc.queueMsg(ircmsgs.privmsg(msg.channel, f"Error: {response.status_code}"))
+                irc.reply(f"Error: {response.status_code}", prefixNick=False)
         except requests.exceptions.Timeout:
-            irc.queueMsg(ircmsgs.privmsg(msg.channel, "Request timed out"))
+            irc.reply("Request timed out", prefixNick=False)
         except requests.exceptions.RequestException as e:
             self.log.warning(f"Network error in image(): {repr(e)}")
-            irc.queueMsg(ircmsgs.privmsg(msg.channel, "Network error"))
+            irc.reply("Network error", prefixNick=False)
         except Exception as e:
             self.log.error(f"Error in image(): {repr(e)}")
-            irc.queueMsg(ircmsgs.privmsg(msg.channel, "Error generating image"))
+            irc.reply("Error generating image", prefixNick=False)
 
 
     image = wrap(image, ["text"])
