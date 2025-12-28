@@ -207,13 +207,27 @@ class Pollinations(callbacks.Plugin):
             if response.status_code == 200:
                 try:
                     data = response.json()
-                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                except (ValueError, KeyError, IndexError):
+                    choice = data.get("choices", [{}])[0]
+                    finish_reason = choice.get("finish_reason", "")
+                    
+                    # Verifica se foi filtrado
+                    if finish_reason == "content_filter":
+                        filter_results = choice.get("content_filter_results", {})
+                        filtered_categories = [k for k, v in filter_results.items() if isinstance(v, dict) and v.get("filtered")]
+                        if filtered_categories:
+                            irc.reply(f"Response filtered by content policy ({', '.join(filtered_categories)})", prefixNick=False)
+                        else:
+                            irc.reply("Response filtered by content policy", prefixNick=False)
+                        return
+                    
+                    content = choice.get("message", {}).get("content", "").strip()
+                except (ValueError, KeyError, IndexError) as e:
+                    self.log.error(f"Parse error: {e}")
                     irc.reply("Failed to parse API response", prefixNick=False)
                     return
                 
                 if not content or len(content) < 3:
-                    irc.reply("Pollinations returned empty response", prefixNick=False)
+                    irc.reply("No response generated", prefixNick=False)
                     return
                 
                 if self.registryValue("nick_strip", msg.channel):
