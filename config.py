@@ -225,7 +225,7 @@ conf.registerChannelValue(
     Pollinations,
     "text_timeout",
     registry.Integer(
-        20,
+        10,
         _("""Timeout (s) for text generation requests"""),
     ),
 )

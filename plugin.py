@@ -37,6 +37,7 @@ class Pollinations(callbacks.Plugin):
         self.last_cleanup = time.time()
         self.context_cache = {}
         self.context_cache_ttl = 30
+        self.active_requests = threading.Semaphore(5)
 
     def doPrivmsg(self, irc, msg):
         def _process():
@@ -79,6 +80,10 @@ class Pollinations(callbacks.Plugin):
                                 return
                             self.pending += 1
                         def _run():
+                            if not self.active_requests.acquire(blocking=False):
+                                with self.pending_lock:
+                                    self.pending -= 1
+                                return
                             try:
                                 text = message
                                 prefix = irc.nick + " "
@@ -88,6 +93,7 @@ class Pollinations(callbacks.Plugin):
                             finally:
                                 with self.pending_lock:
                                     self.pending -= 1
+                                self.active_requests.release()
                         self.executor.submit(_run)
                         break
         
@@ -164,31 +170,48 @@ class Pollinations(callbacks.Plugin):
                     context = self._read_context(irc, channel, context_lines)
                     self.context_cache[cache_key] = (now, context)
             
-            if context:
-                full_prompt = f"{prompt}\n\nRecent conversation:\n{context}\n\nUser: {text}\nAssistant:"
-            else:
-                full_prompt = f"{prompt}\n\nUser: {text}\nAssistant:"
-            
             timeout = self.registryValue("text_timeout", msg.channel) 
             text_model = self.registryValue("text_model", msg.channel) 
-            api_token = self.registryValue("api_token", msg.channel) 
+            api_token = self.registryValue("api_token", msg.channel)
 
-            quoted_prompt = requests.utils.quote(full_prompt, safe='')
+            # Construir mensagens para o novo formato
+            messages = [
+                {"role": "system", "content": prompt}
+            ]
+
+            if context:
+                messages.append({"role": "system", "content": f"Recent conversation:\n{context}"})
+
+            messages.append({"role": "user", "content": text})
+
+            payload = {
+                "messages": messages,
+                "model": text_model,
+                "jsonMode": False
+
+            }
+            headers = {"Content-Type": "application/json"}
+
             
-            api_url = f"https://text.pollinations.ai/{quoted_prompt}?model={requests.utils.quote(text_model)}"
-
-
             if api_token:
-                api_url += f"&token={requests.utils.quote(api_token)}" 
+                headers["Authorization"] = f"Bearer {api_token}"
 
             
-            response = self.session.get(
-                api_url,
+            response = self.session.post(
+                "https://gen.pollinations.ai/v1/chat/completions",
+                json=payload,
+                headers=headers,
                 timeout=timeout
             )
             
             if response.status_code == 200:
-                content = response.text.strip()
+                try:
+                    data = response.json()
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                except (ValueError, KeyError, IndexError):
+                    irc.reply("Failed to parse API response", prefixNick=False)
+                    return
+                
                 if not content or len(content) < 3:
                     irc.reply("Pollinations returned empty response", prefixNick=False)
                     return
@@ -305,7 +328,7 @@ class Pollinations(callbacks.Plugin):
 
     def die(self):
         try:
-            self.executor.shutdown(wait=False)
+            self.executor.shutdown(wait=True, timeout=5)
         except Exception:
             pass
         self.__parent.die()
