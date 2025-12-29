@@ -98,7 +98,7 @@ conf.registerChannelValue(
     "text_model",
     registry.String(
         "openai",
-        _("""Tier Anonymous (Free/Safe): openai(Default), openai-fast, bidara, midijourney. Tier Seed (Advanced/Quota): mistral, gemini, deepseek, openai-large, roblox-rp, unity, evil. Flower: qwen-coder."""),
+        _("""Text models: openai, openai-fast, openai-large, claude, claude-fast, claude-large, gemini, gemini-fast, gemini-large, gemini-search, mistral, grok, deepseek, qwen-coder, perplexity-fast, perplexity-reasoning, midijourney, chickytutor, kimi-k2-thinking, nova-micro"""),
     ),
 )
 
@@ -135,7 +135,7 @@ conf.registerChannelValue(
     "image_model",
     registry.String(
         "flux",
-        _("""Image generation model (flux, turbo, etc.)"""),
+        _("""Image models: flux (default), turbo, zimage, gptimage, gptimage-large, seedream, seedream-pro, kontext, nanobanana, nanobanana-pro"""),
     ),
 )
 
