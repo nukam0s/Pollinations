@@ -106,7 +106,7 @@ conf.registerChannelValue(
     Pollinations,
     "context_lines",
     registry.Integer(
-        50,
+        25,
         _("""Number of recent chat lines to use as context (0 to disable)"""),
     ),
 )

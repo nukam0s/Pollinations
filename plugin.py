@@ -36,70 +36,63 @@ class Pollinations(callbacks.Plugin):
         self.cleanup_interval = 3600
         self.last_cleanup = time.time()
         self.context_cache = {}
-        self.context_cache_ttl = 30
+        self.context_cache_ttl = 90
         self.active_requests = threading.Semaphore(5)
 
     def doPrivmsg(self, irc, msg):
-        def _process():
-            if not irc.isChannel(msg.channel):
-                return
-            if not self.registryValue("auto_reply", msg.channel):
-                return
-            if msg.nick == irc.nick:
-                return
-            trigger_words = self.registryValue("trigger_words", msg.channel)
-            if not trigger_words:
-                return
-            message = msg.args[1]
-            min_interval = self.registryValue("min_reply_interval", msg.channel)
-            now = time.time()
-            last = self.last_reply_time.get(msg.channel, 0)
-            if now - last < min_interval:
-                return
-            
-            if now - self.last_cleanup > self.cleanup_interval:
-                cutoff = now - self.cleanup_interval
-                self.last_reply_time = {k: v for k, v in self.last_reply_time.items() if v > cutoff}
-                self.last_cleanup = now
-        
-            for word in trigger_words:
-                processed_word = word.replace("_", " ").replace("$botnick", irc.nick)
-                if word.startswith('*') and word.endswith('*'):
-                    pattern = re.escape(processed_word.strip('*'))
-                elif word.endswith('*'):
-                    pattern = r'^' + re.escape(processed_word.rstrip('*'))
-                elif word.startswith('*'):
-                    pattern = re.escape(processed_word.lstrip('*')) + r'$'
-                else:
-                    pattern = r'^' + re.escape(processed_word) + r'$'
-                if re.search(pattern, message, re.IGNORECASE):
-                    probability = self.registryValue("trigger_probability", msg.channel)
-                    if random.random() <= probability:
-                        with self.pending_lock:
-                            if self.pending >= self.max_pending:
-                                return
-                            self.pending += 1
-                        def _run():
-                            if not self.active_requests.acquire(blocking=False):
-                                with self.pending_lock:
-                                    self.pending -= 1
-                                return
-                            try:
-                                text = message
-                                prefix = irc.nick + " "
-                                if text.lower().startswith(prefix.lower()):
-                                    text = text[len(prefix):].strip()
-                                self._chat(irc, msg, text)
-                            finally:
-                                with self.pending_lock:
-                                    self.pending -= 1
-                                self.active_requests.release()
-                        self.executor.submit(_run)
-                        break
-        
-        thread = threading.Thread(target=_process)
-        thread.daemon = True
-        thread.start()
+        if not irc.isChannel(msg.channel):
+            return
+        if not self.registryValue("auto_reply", msg.channel):
+            return
+        if msg.nick == irc.nick:
+            return
+        trigger_words = self.registryValue("trigger_words", msg.channel)
+        if not trigger_words:
+            return
+        message = msg.args[1]
+        min_interval = self.registryValue("min_reply_interval", msg.channel)
+        now = time.time()
+        last = self.last_reply_time.get(msg.channel, 0)
+        if now - last < min_interval:
+            return
+        if now - self.last_cleanup > self.cleanup_interval:
+            cutoff = now - self.cleanup_interval
+            self.last_reply_time = {k: v for k, v in self.last_reply_time.items() if v > cutoff}
+            self.last_cleanup = now
+        for word in trigger_words:
+            processed_word = word.replace("_", " ").replace("$botnick", irc.nick)
+            if word.startswith('*') and word.endswith('*'):
+                pattern = re.escape(processed_word.strip('*'))
+            elif word.endswith('*'):
+                pattern = r'^' + re.escape(processed_word.rstrip('*'))
+            elif word.startswith('*'):
+                pattern = re.escape(processed_word.lstrip('*')) + r'$'
+            else:
+                pattern = r'^' + re.escape(processed_word) + r'$'
+            if re.search(pattern, message, re.IGNORECASE):
+                probability = self.registryValue("trigger_probability", msg.channel)
+                if random.random() <= probability:
+                    with self.pending_lock:
+                        if self.pending >= self.max_pending:
+                            return
+                        self.pending += 1
+                    def _run():
+                        if not self.active_requests.acquire(blocking=False):
+                            with self.pending_lock:
+                                self.pending -= 1
+                            return
+                        try:
+                            text = message
+                            prefix = irc.nick + " "
+                            if text.lower().startswith(prefix.lower()):
+                                text = text[len(prefix):].strip()
+                            self._chat(irc, msg, text)
+                        finally:
+                            with self.pending_lock:
+                                self.pending -= 1
+                            self.active_requests.release()
+                    self.executor.submit(_run)
+                    break
     
     @staticmethod
     def tail_lines(path, n):
@@ -109,6 +102,10 @@ class Pollinations(callbacks.Plugin):
                 size = f.tell()
 
                 block_size = n * 150
+                max_size = 524288  # 512KB max
+
+                if size > max_size:
+                    size = max_size
                 
                 if size < block_size:
                     f.seek(0)
@@ -123,6 +120,8 @@ class Pollinations(callbacks.Plugin):
     
     def _read_context(self, irc, channel, context_lines):
         try:
+            start_time = time.time()
+            timeout = 3.5  # 1.5 segundos max
             log_dir = conf.supybot.directories.log()
             network = irc.network
             channel_lower = channel.lower()
@@ -131,6 +130,8 @@ class Pollinations(callbacks.Plugin):
             if not os.path.exists(log_path):
                 return ""
             
+            if time.time() - start_time > timeout:
+                return ""
             recent = self.tail_lines(log_path, context_lines)
             chat_lines = []
             for line in recent:
