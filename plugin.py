@@ -280,7 +280,7 @@ class Pollinations(callbacks.Plugin):
         self._chat(irc, msg, text)
 
     chat = wrap(chat, ["text"])
-
+        
     def image(self, irc, msg, args, text):
         """Generate image from text prompt using Pollinations.ai"""
         if not text.strip():
@@ -357,7 +357,85 @@ class Pollinations(callbacks.Plugin):
             self.active_requests.release()
 
     image = wrap(image, ["text"])
+    
+    def models(self, irc, msg, args, model_type, category):
+        """[text|image] [low|med|high]
+        Lists API models organized by price. Example: @models text low
+        """
+        model_type = (model_type or "").lower().strip()
+        category = (category or "").lower().strip()
 
+        if model_type not in ["text", "image"]:
+            irc.reply("Please specify the model type. Usage: @models text [low|med|high] OR @models image [low|med|high]", prefixNick=False)
+            return
+
+        try:
+            # Alterna automaticamente entre a API de texto e a de imagem
+            url = f"https://gen.pollinations.ai/{model_type}/models"
+            response = self.session.get(url, timeout=5)
+            
+            if response.status_code != 200:
+                irc.reply(f"Error contacting the {model_type} API.", prefixNick=False)
+                return
+
+            data = response.json()
+            if not isinstance(data, list):
+                irc.reply("Unknown data format received.", prefixNick=False)
+                return
+            
+            # Se a API de imagens devolver apenas uma lista de nomes sem preços, avisamos o utilizador
+            if len(data) > 0 and isinstance(data[0], str):
+                if category:
+                    irc.reply(f"All {model_type.capitalize()} models (no price tiers available): {', '.join(data)}", prefixNick=False)
+                else:
+                    irc.reply(f"Available {model_type.capitalize()} Models: {', '.join(data)}", prefixNick=False)
+                return
+
+            low, med, high = [], [], []
+
+            for m in data:
+                if not isinstance(m, dict): continue
+                name = m.get("name") or m.get("id")
+                if not name: continue
+                
+                pricing = m.get("pricing", {})
+                price_val = 0.0
+                
+                # Lê o preço (procura pelo de texto ou fallback para um preço genérico)
+                if pricing:
+                    val = pricing.get("promptTextTokens") or pricing.get("price") or 0.0
+                    try:
+                        price_val = float(val) * 1000000
+                    except ValueError:
+                        price_val = 0.0
+
+                # Divisão nas 3 categorias que pediste
+                if price_val <= 0.50:
+                    low.append(name)
+                elif price_val <= 1.50:
+                    med.append(name)
+                else:
+                    high.append(name)
+
+            # Responde consoante a categoria pedida
+            if category in ["low", "cheap", "free"]:
+                irc.reply(f"Low Cost {model_type.capitalize()} Models: {', '.join(low)}" if low else f"No low cost {model_type} models found.", prefixNick=False)
+            elif category in ["med", "medium"]:
+                irc.reply(f"Med Cost {model_type.capitalize()} Models: {', '.join(med)}" if med else f"No medium cost {model_type} models found.", prefixNick=False)
+            elif category in ["high", "premium"]:
+                irc.reply(f"High Cost {model_type.capitalize()} Models: {', '.join(high)}" if high else f"No high cost {model_type} models found.", prefixNick=False)
+            else:
+                # Resumo por defeito
+                irc.reply(f"{model_type.capitalize()} API Summary: {len(low)} low, {len(med)} med, and {len(high)} high models.", prefixNick=False)
+                irc.reply(f"Usage: @models {model_type} low | med | high", prefixNick=False)
+
+        except Exception as e:
+            self.log.error(f"Error in models command: {e}")
+            irc.reply("Internal error while fetching models.", prefixNick=False)
+
+    # O comando recebe dois argumentos de texto opcionais
+    models = wrap(models, [optional("text"), optional("text")])
+    
     def die(self):
         try:
             self.executor.shutdown(wait=True)
