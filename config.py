@@ -1,4 +1,5 @@
 from supybot import conf, registry
+import requests
 
 try:
     from supybot.i18n import PluginInternationalization
@@ -16,6 +17,26 @@ def configure(advanced):
     from supybot.questions import expect, anything, something, yn
     conf.registerPlugin("Pollinations", True)
 
+def fetch_api_models(endpoint, fallback_text):
+    """Tenta obter a lista de modelos da API no momento em que o config é carregado."""
+    try:
+        # Timeout muito curto para não bloquear o arranque do bot
+        response = requests.get(f"https://gen.pollinations.ai/{endpoint}", timeout=2)
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list):
+                if len(data) > 0 and isinstance(data[0], dict):
+                    models = [m.get("name", m.get("id", str(m))) for m in data]
+                else:
+                    models = [str(m) for m in data]
+
+                models = [m for m in models if m]
+                if models:
+                    return "" + ", ".join(models)
+    except Exception:
+        pass
+    return fallback_text
+    
 Pollinations = conf.registerPlugin("Pollinations")
 
 conf.registerChannelValue(
@@ -98,7 +119,7 @@ conf.registerChannelValue(
     "text_model",
     registry.String(
         "openai",
-        _("""Text models: openai, openai-fast, openai-large, claude, claude-fast, claude-large, gemini, gemini-fast, gemini-large, gemini-search, mistral, grok, deepseek, qwen-coder, perplexity-fast, perplexity-reasoning, midijourney, chickytutor, kimi-k2-thinking, nova-micro"""),
+        fetch_api_models("text/models", _("""Text models: openai, openai-fast, openai-large, claude, claude-fast, claude-large, gemini, gemini-fast, gemini-large, gemini-search, mistral, grok, deepseek, qwen-coder, perplexity-fast, perplexity-reasoning, midijourney, chickytutor, kimi-k2-thinking, nova-micro""")),
     ),
 )
 
@@ -135,7 +156,7 @@ conf.registerChannelValue(
     "image_model",
     registry.String(
         "flux",
-        _("""Image models: flux (default), turbo, zimage, gptimage, gptimage-large, seedream, seedream-pro, kontext, nanobanana, nanobanana-pro"""),
+        fetch_api_models("image/models", _("""Image models: flux (default), turbo, zimage, gptimage, gptimage-large, seedream, seedream-pro, kontext, nanobanana, nanobanana-pro""")),
     ),
 )
 

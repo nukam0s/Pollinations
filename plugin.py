@@ -23,7 +23,7 @@ class Pollinations(callbacks.Plugin):
         self.__parent = super(Pollinations, self)
         self.__parent.__init__(irc)
         self.session = requests.Session()
-        retry_strategy = Retry(total=4, backoff_factor=1, status_forcelist=[502, 503, 504])
+        retry_strategy = Retry(total=2, backoff_factor=0.5, status_forcelist=[502, 503, 504])
         adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=10)
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
@@ -31,6 +31,7 @@ class Pollinations(callbacks.Plugin):
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
         self.pending = 0
         self.pending_lock = threading.Lock()
+        self.dict_lock = threading.Lock()
         self.max_pending = 10  
         self.last_reply_time = {}
         self.cleanup_interval = 3600
@@ -38,7 +39,8 @@ class Pollinations(callbacks.Plugin):
         self.context_cache = {}
         self.context_cache_ttl = 90
         self.active_requests = threading.Semaphore(5)
-
+        
+        
     def doPrivmsg(self, irc, msg):
         if not irc.isChannel(msg.channel):
             return
@@ -52,13 +54,19 @@ class Pollinations(callbacks.Plugin):
         message = msg.args[1]
         min_interval = self.registryValue("min_reply_interval", msg.channel)
         now = time.time()
-        last = self.last_reply_time.get(msg.channel, 0)
+        
+        with self.dict_lock:
+            last = self.last_reply_time.get(msg.channel, 0)
+            
         if now - last < min_interval:
             return
-        if now - self.last_cleanup > self.cleanup_interval:
-            cutoff = now - self.cleanup_interval
-            self.last_reply_time = {k: v for k, v in self.last_reply_time.items() if v > cutoff}
-            self.last_cleanup = now
+            
+        with self.dict_lock:
+            if now - self.last_cleanup > self.cleanup_interval:
+                cutoff = now - self.cleanup_interval
+                self.last_reply_time = {k: v for k, v in self.last_reply_time.items() if v > cutoff}
+                self.last_cleanup = now
+                
         for word in trigger_words:
             processed_word = word.replace("_", " ").replace("$botnick", irc.nick)
             if word.startswith('*') and word.endswith('*'):
@@ -102,7 +110,7 @@ class Pollinations(callbacks.Plugin):
                 size = f.tell()
 
                 block_size = n * 150
-                max_size = 524288  # 512KB max
+                max_size = 524288
 
                 if size > max_size:
                     size = max_size
@@ -121,7 +129,7 @@ class Pollinations(callbacks.Plugin):
     def _read_context(self, irc, channel, context_lines):
         try:
             start_time = time.time()
-            timeout = 3.5  # 1.5 segundos max
+            timeout = 3.5
             log_dir = conf.supybot.directories.log()
             network = irc.network
             channel_lower = channel.lower()
@@ -148,6 +156,11 @@ class Pollinations(callbacks.Plugin):
     
     def _chat(self, irc, msg, text):
         channel = msg.channel if irc.isChannel(msg.channel) else msg.nick
+        
+        if not self.active_requests.acquire(blocking=False):
+            irc.reply("I am processing too many requests right now. Please try again in a moment.", prefixNick=False)
+            return
+            
         try:
             if self.registryValue("nick_include", msg.channel):
                 text = "%s: %s" % (msg.nick, text)
@@ -160,22 +173,22 @@ class Pollinations(callbacks.Plugin):
                 cache_key = msg.channel
                 now = time.time()
                 
-                if cache_key in self.context_cache:
-                    cached_time, cached_context = self.context_cache[cache_key]
-                    if now - cached_time < self.context_cache_ttl:
-                        context = cached_context
+                with self.dict_lock:
+                    if cache_key in self.context_cache:
+                        cached_time, cached_context = self.context_cache[cache_key]
+                        if now - cached_time < self.context_cache_ttl:
+                            context = cached_context
+                        else:
+                            context = self._read_context(irc, channel, context_lines)
+                            self.context_cache[cache_key] = (now, context)
                     else:
                         context = self._read_context(irc, channel, context_lines)
                         self.context_cache[cache_key] = (now, context)
-                else:
-                    context = self._read_context(irc, channel, context_lines)
-                    self.context_cache[cache_key] = (now, context)
             
             timeout = self.registryValue("text_timeout", msg.channel) 
             text_model = self.registryValue("text_model", msg.channel) 
             api_token = self.registryValue("api_token", msg.channel)
 
-            # Construir mensagens para o novo formato
             messages = [
                 {"role": "system", "content": prompt}
             ]
@@ -189,14 +202,11 @@ class Pollinations(callbacks.Plugin):
                 "messages": messages,
                 "model": text_model,
                 "jsonMode": False
-
             }
             headers = {"Content-Type": "application/json"}
-
             
             if api_token:
                 headers["Authorization"] = f"Bearer {api_token}"
-
             
             response = self.session.post(
                 "https://gen.pollinations.ai/v1/chat/completions",
@@ -211,7 +221,6 @@ class Pollinations(callbacks.Plugin):
                     choice = data.get("choices", [{}])[0]
                     finish_reason = choice.get("finish_reason", "")
                     
-                    # Verifica se foi filtrado
                     if finish_reason == "content_filter":
                         filter_results = choice.get("content_filter_results", {})
                         filtered_categories = [k for k, v in filter_results.items() if isinstance(v, dict) and v.get("filtered")]
@@ -245,7 +254,8 @@ class Pollinations(callbacks.Plugin):
                     text = f"{msg.nick}: {response_text}" if prefix else response_text
                     irc.reply(text, prefixNick=False, to=channel)
                 
-                self.last_reply_time[msg.channel] = time.time()
+                with self.dict_lock:
+                    self.last_reply_time[msg.channel] = time.time()
                 return
             else:
                 irc.reply(f"API Error {response.status_code}", prefixNick=False)
@@ -262,6 +272,8 @@ class Pollinations(callbacks.Plugin):
             self.log.error(f"Unexpected error in _chat: {repr(e)}")
             irc.reply("Unexpected error.", prefixNick=False)
             return
+        finally:
+            self.active_requests.release()
 
     def chat(self, irc, msg, args, text):
         """Public command wrapper for _chat"""
@@ -274,37 +286,41 @@ class Pollinations(callbacks.Plugin):
         if not text.strip():
             irc.reply("Please provide a prompt", prefixNick=False)
             return
-        
-        width = self.registryValue("image_width", msg.channel)
-        height = self.registryValue("image_height", msg.channel)
-        model = self.registryValue("image_model", msg.channel)
-        enhance = self.registryValue("image_enhance", msg.channel)
-        nologo = self.registryValue("image_nologo", msg.channel)
-        private = self.registryValue("image_private", msg.channel)
-        safe = self.registryValue("image_safe", msg.channel)
-        negative_prompt = self.registryValue("negative_prompt", msg.channel)
-        shorten_urls = self.registryValue("shorten_urls", msg.channel)
-        
-        seed = random.randint(1, 1000000)
-        
-        params = {
-            "width": width,
-            "height": height,
-            "seed": seed,
-            "model": model,
-            "enhance": str(enhance).lower(),
-            "nologo": str(nologo).lower(),
-            "private": str(private).lower(),
-            "safe": str(safe).lower(),
-        }
-        
-        if negative_prompt.strip():
-            params["negative_prompt"] = negative_prompt
-        
-        param_string = "&".join([f"{k}={requests.utils.quote(str(v))}" for k, v in params.items()])
-        image_url = f"https://image.pollinations.ai/prompt/{requests.utils.quote(text)}?{param_string}"
+            
+        if not self.active_requests.acquire(blocking=False):
+            irc.reply("The image server is currently busy. Please try again shortly.", prefixNick=False)
+            return
         
         try:
+            width = self.registryValue("image_width", msg.channel)
+            height = self.registryValue("image_height", msg.channel)
+            model = self.registryValue("image_model", msg.channel)
+            enhance = self.registryValue("image_enhance", msg.channel)
+            nologo = self.registryValue("image_nologo", msg.channel)
+            private = self.registryValue("image_private", msg.channel)
+            safe = self.registryValue("image_safe", msg.channel)
+            negative_prompt = self.registryValue("negative_prompt", msg.channel)
+            shorten_urls = self.registryValue("shorten_urls", msg.channel)
+            
+            seed = random.randint(1, 1000000)
+            
+            params = {
+                "width": width,
+                "height": height,
+                "seed": seed,
+                "model": model,
+                "enhance": str(enhance).lower(),
+                "nologo": str(nologo).lower(),
+                "private": str(private).lower(),
+                "safe": str(safe).lower(),
+            }
+            
+            if negative_prompt.strip():
+                params["negative_prompt"] = negative_prompt
+            
+            param_string = "&".join([f"{k}={requests.utils.quote(str(v))}" for k, v in params.items()])
+            image_url = f"https://image.pollinations.ai/prompt/{requests.utils.quote(text)}?{param_string}"
+            
             self.log.info(f"Requesting image URL: {image_url[:150]}...")
             response = self.session.get(image_url, timeout=15, allow_redirects=True)
             self.log.info(f"Response status: {response.status_code}, Content-Type: {response.headers.get('Content-Type', 'unknown')}")
@@ -337,17 +353,16 @@ class Pollinations(callbacks.Plugin):
         except Exception as e:
             self.log.error(f"Error in image(): {repr(e)}")
             irc.reply("Error generating image", prefixNick=False)
-
+        finally:
+            self.active_requests.release()
 
     image = wrap(image, ["text"])
 
     def die(self):
         try:
-            self.executor.shutdown(wait=True, timeout=5)
+            self.executor.shutdown(wait=True)
         except Exception:
             pass
         self.__parent.die()
 
 Class = Pollinations
-
-
