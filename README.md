@@ -17,27 +17,31 @@ A Limnoria IRC bot plugin that integrates with [Pollinations.ai](https://pollina
 
 ## Commands
 ### Text Generation
-```
-chat <prompt>
-```
+`chat <prompt>`
+
 Generate AI text responses. The bot can use recent channel conversation as context.  
 **Examples:**
-```
-chat Explain quantum physics simply
-chat What do you think about the previous discussion?
-```
+`chat Explain quantum physics simply`
+`chat What do you think about the previous discussion?`
 
 ### Image Generation
-```
-image <prompt>
-```
+`image <prompt>`
+
 Generate images from text descriptions.  
 **Examples:**
-```
-image beautiful sunset over mountains
-image cute cat playing with yarn
-image cyberpunk city at night
-image realistic portrait of a medieval knight
+`image beautiful sunset over mountains`
+`image cute cat playing with yarn`
+`image cyberpunk city at night`
+`image realistic portrait of a medieval knight`
+
+### List Available Models
+`models [text|image] [low|med|high]`
+
+Lists available API models organized by price categories (automatically fetched in real-time).  
+**Examples:**
+`models`
+`models text low`
+`models image med`
 ```
 
 ## Configuration
