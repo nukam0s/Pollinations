@@ -31,10 +31,14 @@ class Pollinations(callbacks.Plugin):
         # 500/429 errors, so we retry those too with a longer backoff.
         self.image_session = requests.Session()
         image_retry = Retry(
-            total=3,
-            backoff_factor=2.0,
+            total=1,
+            backoff_factor=1.0,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["GET"],
+            # Return the last response (with the error status) instead of
+            # raising RetryError when retries are exhausted, so the caller can
+            # inspect the status and fall back to another model.
+            raise_on_status=False,
         )
         image_adapter = HTTPAdapter(max_retries=image_retry, pool_connections=10, pool_maxsize=10)
         self.image_session.mount("http://", image_adapter)
@@ -396,9 +400,16 @@ class Pollinations(callbacks.Plugin):
             headers = {}
             if api_token:
                 headers["Authorization"] = f"Bearer {api_token}"
-            response = self.image_session.get(
-                image_url, timeout=timeout, allow_redirects=True, headers=headers
-            )
+            try:
+                response = self.image_session.get(
+                    image_url, timeout=timeout, allow_redirects=True, headers=headers
+                )
+            except requests.exceptions.RequestException as e:
+                # Network/timeout/SSL error — log and fall back to the next model
+                # instead of letting the exception propagate (which would skip
+                # the fallback and surface as a generic "Network error").
+                self.log.warning(f"Image request failed (model={m}): {repr(e)}")
+                return None
             self.log.info(
                 f"Response status: {response.status_code}, "
                 f"Content-Type: {response.headers.get('Content-Type', 'unknown')}"
