@@ -27,6 +27,18 @@ class Pollinations(callbacks.Plugin):
         adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=10)
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
+        # Dedicated session for image requests: image gen often returns transient
+        # 500/429 errors, so we retry those too with a longer backoff.
+        self.image_session = requests.Session()
+        image_retry = Retry(
+            total=3,
+            backoff_factor=2.0,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+        )
+        image_adapter = HTTPAdapter(max_retries=image_retry, pool_connections=10, pool_maxsize=10)
+        self.image_session.mount("http://", image_adapter)
+        self.image_session.mount("https://", image_adapter)
         self.max_workers = 10
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
         self.pending = 0
@@ -138,9 +150,11 @@ class Pollinations(callbacks.Plugin):
             if not os.path.exists(log_path):
                 return ""
             
+            recent = self.tail_lines(log_path, context_lines)
+            # Bail out if file reading already took too long (bounded by the
+            # 512KB seek cap in tail_lines, but check just in case).
             if time.time() - start_time > timeout:
                 return ""
-            recent = self.tail_lines(log_path, context_lines)
             chat_lines = []
             for line in recent:
                 if "<" in line and ">" in line:
@@ -301,6 +315,16 @@ class Pollinations(callbacks.Plugin):
             safe = self.registryValue("image_safe", msg.channel)
             negative_prompt = self.registryValue("negative_prompt", msg.channel)
             shorten_urls = self.registryValue("shorten_urls", msg.channel)
+            timeout = self.registryValue("image_timeout", msg.channel)
+            fallback_model = self.registryValue("image_fallback_model", msg.channel)
+            api_token = self.registryValue("api_token", msg.channel)
+            
+            # nologo and private require an authenticated account; without a token
+            # they are ignored by the API and can contribute to errors, so only
+            # send them when we actually have a token.
+            if not api_token:
+                nologo = False
+                private = False
             
             seed = random.randint(1, 1000000)
             
@@ -313,40 +337,37 @@ class Pollinations(callbacks.Plugin):
                 "nologo": str(nologo).lower(),
                 "private": str(private).lower(),
                 "safe": str(safe).lower(),
+                "referrer": "limnoria-pollinations-plugin",
             }
             
             if negative_prompt.strip():
                 params["negative_prompt"] = negative_prompt
             
-            param_string = "&".join([f"{k}={requests.utils.quote(str(v))}" for k, v in params.items()])
-            image_url = f"https://image.pollinations.ai/prompt/{requests.utils.quote(text)}?{param_string}"
+            final_url = self._generate_image(text, params, timeout, model, fallback_model, api_token)
             
-            self.log.info(f"Requesting image URL: {image_url[:150]}...")
-            response = self.session.get(image_url, timeout=15, allow_redirects=True)
-            self.log.info(f"Response status: {response.status_code}, Content-Type: {response.headers.get('Content-Type', 'unknown')}")
+            if final_url is None:
+                return  # error already replied
             
-            if response.status_code == 200:
-                content_type = response.headers.get("Content-Type", "")
-                if content_type.startswith("image/"):
-                    final_url = response.url
-                    if shorten_urls:
-                        try:
-                            shorten_response = self.session.post(
-                                "https://is.gd/create.php",
-                                data={"format": "simple", "url": final_url},
-                                timeout=5,
-                            )
-                            if shorten_response.status_code == 200:
-                                final_url = shorten_response.text.strip()
-                        except Exception as e:
-                            self.log.warning(f"URL shortener failed: {e}")
-                    irc.reply(final_url, prefixNick=False)
-                else:
-                    irc.reply("Generated invalid image, try different prompt", prefixNick=False)
+            if not final_url.startswith("image://"):
+                # final_url is the image URL
+                display_url = final_url
+                if shorten_urls:
+                    try:
+                        shorten_response = self.session.post(
+                            "https://is.gd/create.php",
+                            data={"format": "simple", "url": display_url},
+                            timeout=5,
+                        )
+                        if shorten_response.status_code == 200:
+                            display_url = shorten_response.text.strip()
+                    except Exception as e:
+                        self.log.warning(f"URL shortener failed: {e}")
+                irc.reply(display_url, prefixNick=False)
             else:
-                irc.reply(f"Error: {response.status_code}", prefixNick=False)
+                # error sentinel
+                irc.reply(final_url[len("image://"):], prefixNick=False)
         except requests.exceptions.Timeout:
-            irc.reply("Request timed out", prefixNick=False)
+            irc.reply("Request timed out (image generation can take up to 60s, try again)", prefixNick=False)
         except requests.exceptions.RequestException as e:
             self.log.warning(f"Network error in image(): {repr(e)}")
             irc.reply("Network error", prefixNick=False)
@@ -356,8 +377,63 @@ class Pollinations(callbacks.Plugin):
         finally:
             self.active_requests.release()
 
+    def _generate_image(self, text, params, timeout, model, fallback_model, api_token):
+        """Build the image URL, request it, and return either the final image
+        URL string, or an 'image://<error message>' sentinel, or None if an
+        error was already replied. Tries the configured model first, then the
+        fallback model if the first attempt fails with a non-transient error."""
+        def _build_url(m):
+            p = dict(params)
+            p["model"] = m
+            param_string = "&".join(
+                [f"{k}={requests.utils.quote(str(v))}" for k, v in p.items()]
+            )
+            return f"https://image.pollinations.ai/prompt/{requests.utils.quote(text)}?{param_string}"
+
+        def _attempt(m):
+            image_url = _build_url(m)
+            self.log.info(f"Requesting image URL: {image_url[:200]}...")
+            headers = {}
+            if api_token:
+                headers["Authorization"] = f"Bearer {api_token}"
+            response = self.image_session.get(
+                image_url, timeout=timeout, allow_redirects=True, headers=headers
+            )
+            self.log.info(
+                f"Response status: {response.status_code}, "
+                f"Content-Type: {response.headers.get('Content-Type', 'unknown')}"
+            )
+            if response.status_code == 200:
+                content_type = response.headers.get("Content-Type", "")
+                if content_type.startswith("image/"):
+                    return response.url
+                # 200 but not an image — log body for diagnosis
+                body = response.text[:300] if response.text else ""
+                self.log.warning(f"Non-image 200 response (model={m}): {body}")
+                return f"image://Generated invalid image, try different prompt"
+            else:
+                body = response.text[:300] if response.text else ""
+                self.log.warning(
+                    f"Image API error {response.status_code} (model={m}): {body}"
+                )
+                return None
+
+        result = _attempt(model)
+        if result is not None:
+            return result
+
+        # First attempt failed; try the fallback model if it's different
+        if fallback_model and fallback_model.lower() != model.lower():
+            self.log.info(f"Primary model '{model}' failed, trying fallback '{fallback_model}'")
+            result = _attempt(fallback_model)
+            if result is not None:
+                return result
+            return f"image://Error: image generation failed for both '{model}' and '{fallback_model}'"
+
+        return f"image://Error: image generation failed for model '{model}'"
+
     image = wrap(image, ["text"])
-    
+
     def models(self, irc, msg, args, model_type, category):
         """[text|image] [low|med|high]
         Lists API models organized by price. Example: models text low
@@ -433,7 +509,10 @@ class Pollinations(callbacks.Plugin):
     
     def die(self):
         try:
-            self.executor.shutdown(wait=True)
+            # wait=False so reload/shutdown is not blocked by in-flight
+            # image requests (which can take up to 60s). Pending workers will
+            # be abandoned and cleaned up by the interpreter on exit.
+            self.executor.shutdown(wait=False)
         except Exception:
             pass
         self.__parent.die()

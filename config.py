@@ -164,8 +164,8 @@ conf.registerChannelValue(
     Pollinations,
     "image_enhance",
     registry.Boolean(
-        True,
-        _("""Enhance image quality"""),
+        False,
+        _("""Enhance image quality (slower, makes an extra LLM call to improve the prompt)"""),
     ),
 )
 
@@ -173,8 +173,8 @@ conf.registerChannelValue(
     Pollinations,
     "image_nologo",
     registry.Boolean(
-        True,
-        _("""Remove watermark/logo"""),
+        False,
+        _("""Remove watermark/logo (requires an API token, ignored for anonymous access)"""),
     ),
 )
 
@@ -182,8 +182,26 @@ conf.registerChannelValue(
     Pollinations,
     "image_private",
     registry.Boolean(
-        True,
-        _("""Private generation"""),
+        False,
+        _("""Private generation (requires an API token, ignored for anonymous access)"""),
+    ),
+)
+
+conf.registerChannelValue(
+    Pollinations,
+    "image_timeout",
+    registry.Integer(
+        60,
+        _("""Timeout (s) for image generation requests. Image gen can take 30-60s."""),
+    ),
+)
+
+conf.registerChannelValue(
+    Pollinations,
+    "image_fallback_model",
+    registry.String(
+        "flux",
+        _("""Fallback model if the configured image_model fails (use a model that works anonymously, e.g. flux)"""),
     ),
 )
 
