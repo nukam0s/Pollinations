@@ -227,8 +227,8 @@ conf.registerChannelValue(
     Pollinations,
     "shorten_urls",
     registry.Boolean(
-        True,
-        _("""Shorten image URLs using URL shortener"""),
+        False,
+        _("""Shorten image URLs using is.gd (disabled by default because is.gd is often unreliable)"""),
     ),
 )
 

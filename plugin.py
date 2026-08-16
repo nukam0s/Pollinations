@@ -363,7 +363,21 @@ class Pollinations(callbacks.Plugin):
                             timeout=5,
                         )
                         if shorten_response.status_code == 200:
-                            display_url = shorten_response.text.strip()
+                            candidate = shorten_response.text.strip()
+                            # is.gd returns the short URL on success, but on
+                            # failure it returns 200 with an error message like
+                            # "Error, database insert failed". Only use the
+                            # candidate if it actually looks like a URL.
+                            if candidate.lower().startswith("http"):
+                                display_url = candidate
+                            else:
+                                self.log.warning(
+                                    f"URL shortener returned non-URL body: {candidate[:120]}"
+                                )
+                        else:
+                            self.log.warning(
+                                f"URL shortener returned status {shorten_response.status_code}"
+                            )
                     except Exception as e:
                         self.log.warning(f"URL shortener failed: {e}")
                 irc.reply(display_url, prefixNick=False)
