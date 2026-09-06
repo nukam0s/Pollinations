@@ -23,7 +23,7 @@ class Pollinations(callbacks.Plugin):
         self.__parent = super(Pollinations, self)
         self.__parent.__init__(irc)
         self.session = requests.Session()
-        retry_strategy = Retry(total=2, backoff_factor=0.5, status_forcelist=[502, 503, 504])
+        retry_strategy = Retry(total=2, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=None, raise_on_status=False)
         adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=10)
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
@@ -55,6 +55,10 @@ class Pollinations(callbacks.Plugin):
         self.context_cache = {}
         self.context_cache_ttl = 90
         self.active_requests = threading.Semaphore(5)
+        self._last_drop_notice = {}
+        self._drop_notice_interval = 30
+        self._text_models_cache = None  # (timestamp, set_of_names) or None
+        self._text_models_cache_ttl = 600  # 10 minutes
         
         
     def doPrivmsg(self, irc, msg):
@@ -98,13 +102,14 @@ class Pollinations(callbacks.Plugin):
                 if random.random() <= probability:
                     with self.pending_lock:
                         if self.pending >= self.max_pending:
+                            now_drop = time.time()
+                            last_drop = self._last_drop_notice.get(msg.channel, 0)
+                            if now_drop - last_drop >= self._drop_notice_interval:
+                                self._last_drop_notice[msg.channel] = now_drop
+                                irc.reply("Queue is full, request dropped. Please try again shortly.", prefixNick=False, to=msg.channel)
                             return
                         self.pending += 1
                     def _run():
-                        if not self.active_requests.acquire(blocking=False):
-                            with self.pending_lock:
-                                self.pending -= 1
-                            return
                         try:
                             text = message
                             prefix = irc.nick + " "
@@ -114,7 +119,6 @@ class Pollinations(callbacks.Plugin):
                         finally:
                             with self.pending_lock:
                                 self.pending -= 1
-                            self.active_requests.release()
                     self.executor.submit(_run)
                     break
     
@@ -171,7 +175,98 @@ class Pollinations(callbacks.Plugin):
             return "\n".join(chat_lines[-context_lines:])
         except Exception:
             return ""
-    
+
+    def _get_valid_text_models(self):
+        """Return a set of valid text model names, cached for 10 minutes.
+
+        Fetches GET https://gen.pollinations.ai/text/models on cache miss.
+        Returns None on any failure (failures are NOT cached).
+        """
+        now = time.time()
+        if self._text_models_cache is not None:
+            cached_ts, cached_set = self._text_models_cache
+            if now - cached_ts < self._text_models_cache_ttl:
+                return cached_set
+
+        try:
+            response = self.session.get(
+                "https://gen.pollinations.ai/text/models", timeout=10
+            )
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, list):
+                    names = set()
+                    for m in data:
+                        if isinstance(m, dict):
+                            if m.get("name"):
+                                names.add(m["name"])
+                            if m.get("id"):
+                                names.add(m["id"])
+                        elif isinstance(m, str):
+                            names.add(m)
+                    if names:
+                        self._text_models_cache = (now, names)
+                        return names
+        except Exception:
+            pass
+        return None
+
+    def _chat_request(self, model, messages, timeout, api_token):
+        """Send a chat completion API request for the given model.
+
+        Returns (content_string, None) on success with usable content,
+        or (None, error_string) on failure.  Raises on network/timeout
+        errors so the caller can surface them to IRC.
+        """
+        payload = {
+            "messages": messages,
+            "model": model,
+            "jsonMode": False
+        }
+        headers = {"Content-Type": "application/json"}
+        if api_token:
+            headers["Authorization"] = f"Bearer {api_token}"
+
+        _attempt_start = time.time()
+        response = self.session.post(
+            "https://gen.pollinations.ai/v1/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=timeout
+        )
+        _elapsed = time.time() - _attempt_start
+
+        if response.status_code != 200:
+            self.log.info("Text attempt on model %s took %.1fs (status=%s)", model, _elapsed, response.status_code)
+            self.log.warning(f"Chat API error {response.status_code} (model={model})")
+            return (None, "HTTP %d" % response.status_code)
+
+        try:
+            data = response.json()
+            choice = data.get("choices", [{}])[0]
+            finish_reason = choice.get("finish_reason", "")
+
+            if finish_reason == "content_filter":
+                self.log.info("Text attempt on model %s took %.1fs (status=%s)", model, _elapsed, "content_filter")
+                filter_results = choice.get("content_filter_results", {})
+                filtered_categories = [
+                    k for k, v in filter_results.items()
+                    if isinstance(v, dict) and v.get("filtered")
+                ]
+                details = ", ".join(filtered_categories) if filtered_categories else "content policy"
+                return (None, "content_filter:" + details)
+
+            content = choice.get("message", {}).get("content", "").strip()
+            if content and len(content) >= 3:
+                self.log.info("Text attempt on model %s took %.1fs (status=%s)", model, _elapsed, "ok")
+                return (content, None)
+            self.log.info("Text attempt on model %s took %.1fs (status=%s)", model, _elapsed, "empty")
+            return (None, "empty")
+        except (ValueError, KeyError, IndexError) as e:
+            self.log.info("Text attempt on model %s took %.1fs (status=%s)", model, _elapsed, "parse_error")
+            self.log.error(f"Parse error (model={model}): {e}")
+            return (None, "parse_error")
+
     def _chat(self, irc, msg, text):
         channel = msg.channel if irc.isChannel(msg.channel) else msg.nick
         
@@ -216,71 +311,78 @@ class Pollinations(callbacks.Plugin):
 
             messages.append({"role": "user", "content": text})
 
-            payload = {
-                "messages": messages,
-                "model": text_model,
-                "jsonMode": False
-            }
-            headers = {"Content-Type": "application/json"}
-            
-            if api_token:
-                headers["Authorization"] = f"Bearer {api_token}"
-            
-            response = self.session.post(
-                "https://gen.pollinations.ai/v1/chat/completions",
-                json=payload,
-                headers=headers,
-                timeout=timeout
-            )
-            
-            if response.status_code == 200:
-                try:
-                    data = response.json()
-                    choice = data.get("choices", [{}])[0]
-                    finish_reason = choice.get("finish_reason", "")
-                    
-                    if finish_reason == "content_filter":
-                        filter_results = choice.get("content_filter_results", {})
-                        filtered_categories = [k for k, v in filter_results.items() if isinstance(v, dict) and v.get("filtered")]
-                        if filtered_categories:
-                            irc.reply(f"Response filtered by content policy ({', '.join(filtered_categories)})", prefixNick=False)
-                        else:
-                            irc.reply("Response filtered by content policy", prefixNick=False)
-                        return
-                    
-                    content = choice.get("message", {}).get("content", "").strip()
-                except (ValueError, KeyError, IndexError) as e:
-                    self.log.error(f"Parse error: {e}")
-                    irc.reply("Failed to parse API response", prefixNick=False)
-                    return
-                
-                if not content or len(content) < 3:
-                    irc.reply("No response generated", prefixNick=False)
-                    return
-                
-                if self.registryValue("nick_strip", msg.channel):
-                    content = re.sub(r"^%s: " % (irc.nick), "", content)
-                
-                prefix = self.registryValue("nick_prefix", msg.channel)
-                if self.registryValue("reply_intact", msg.channel):
-                    for line in content.splitlines():
-                        if line:
-                            text = f"{msg.nick}: {line}" if prefix else line
-                            irc.queueMsg(ircmsgs.privmsg(channel, text))
+            # --- primary attempt ---
+            content, error = self._chat_request(text_model, messages, timeout, api_token)
+
+            # Content filter is not retryable — reply immediately
+            if error is not None and isinstance(error, str) and error.startswith("content_filter:"):
+                details = error.split(":", 1)[1]
+                if details != "content policy":
+                    irc.reply("Response filtered by content policy (%s)" % details, prefixNick=False)
                 else:
-                    response_text = " ".join(content.splitlines())
-                    text = f"{msg.nick}: {response_text}" if prefix else response_text
-                    irc.reply(text, prefixNick=False, to=channel)
-                
-                with self.dict_lock:
-                    self.last_reply_time[msg.channel] = time.time()
+                    irc.reply("Response filtered by content policy", prefixNick=False)
                 return
+
+            # --- fallback attempts on failure ---
+            if content is None:
+                valid_models = self._get_valid_text_models()
+                # Skip primary model early if it's known to be invalid
+                if valid_models is not None and text_model not in valid_models:
+                    self.log.info("Primary text model '%s' is not in the valid models list", text_model)
+
+                fallback_models_str = self.registryValue("text_fallback_model", msg.channel)
+                fallback_models = fallback_models_str.split() if fallback_models_str else []
+                for fb_model in fallback_models:
+                    if fb_model.lower() != text_model.lower():
+                        # Fast-fail: skip fallback models not in the valid list
+                        if valid_models is not None and fb_model not in valid_models:
+                            self.log.info("Skipping unknown text fallback model: %s", fb_model)
+                            continue
+                        self.log.info(
+                            "Primary model '%s' failed (%s), trying fallback '%s'"
+                            % (text_model, error, fb_model)
+                        )
+                        content, fb_error = self._chat_request(fb_model, messages, timeout, api_token)
+                        if content is not None:
+                            break
+                        # Content filter on fallback — reply and stop
+                        if fb_error is not None and isinstance(fb_error, str) and fb_error.startswith("content_filter:"):
+                            details = fb_error.split(":", 1)[1]
+                            if details != "content policy":
+                                irc.reply("Response filtered by content policy (%s)" % details, prefixNick=False)
+                            else:
+                                irc.reply("Response filtered by content policy", prefixNick=False)
+                            return
+                        error = fb_error  # track last error for logging
+
+            if content is None:
+                self.log.warning("All text models failed. Last error: %s" % (error,))
+                irc.reply("The AI service is currently unavailable, please try again in a moment.", prefixNick=False)
+                return
+
+            # --- format and send reply ---
+            if self.registryValue("nick_strip", msg.channel):
+                content = re.sub(r"^%s: " % (irc.nick), "", content)
+
+            prefix = self.registryValue("nick_prefix", msg.channel)
+            if self.registryValue("reply_intact", msg.channel):
+                for line in content.splitlines():
+                    if line:
+                        text = "%s: %s" % (msg.nick, line) if prefix else line
+                        irc.queueMsg(ircmsgs.privmsg(channel, text))
             else:
-                irc.reply(f"API Error {response.status_code}", prefixNick=False)
-                return
+                response_text = " ".join(content.splitlines())
+                text = "%s: %s" % (msg.nick, response_text) if prefix else response_text
+                irc.reply(text, prefixNick=False, to=channel)
+
+            with self.dict_lock:
+                self.last_reply_time[msg.channel] = time.time()
         
         except requests.exceptions.Timeout:
             irc.reply("Request timed out.", prefixNick=False)
+            return
+        except requests.exceptions.RetryError:
+            irc.reply("The AI service is overloaded right now, please try again in a moment.", prefixNick=False)
             return
         except requests.exceptions.RequestException as e:
             self.log.warning(f"Network error: {repr(e)}")

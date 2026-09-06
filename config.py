@@ -57,7 +57,7 @@ conf.registerChannelValue(
     "api_token",
     registry.String(
         "",  
-        _("""Pollinations.ai API token (x-enter-token). Leave empty for anonymous access."""),
+        _("""Pollinations.ai API token (Authorization: Bearer). Leave empty for anonymous access."""),
         private=True,
     ),
 )
@@ -120,6 +120,15 @@ conf.registerChannelValue(
     registry.String(
         "openai",
         fetch_api_models("text/models", _("""Text models: openai, openai-fast, openai-large, claude, claude-fast, claude-large, gemini, gemini-fast, gemini-large, gemini-search, mistral, grok, deepseek, qwen-coder, perplexity-fast, perplexity-reasoning, midijourney, chickytutor, kimi-k2-thinking, nova-micro""")),
+    ),
+)
+
+conf.registerChannelValue(
+    Pollinations,
+    "text_fallback_model",
+    registry.String(
+        "openai-fast",
+        _("""Space-separated fallback models if the primary text_model fails (e.g. 'openai-fast')"""),
     ),
 )
 
@@ -264,7 +273,7 @@ conf.registerChannelValue(
     Pollinations,
     "text_timeout",
     registry.Integer(
-        10,
+        30,
         _("""Timeout (s) for text generation requests"""),
     ),
 )
