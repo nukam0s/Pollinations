@@ -6,13 +6,14 @@ A Limnoria IRC bot plugin that integrates with [Pollinations.ai](https://pollina
 - **Image Generation**: Create images from text prompts
 - **Auto-Reply**: Automatically respond to trigger words in channel
 - **Context Awareness**: Uses recent channel conversation for better responses
+- **Resilience & Retry**: Automatic retries on 429/5xx, fallback models, queue-throttling notices
 - **Highly Configurable**: Multiple settings for customization
 - **URL Shortening**: Optional shortened URLs for generated images
 
 ## Installation
 1. Download the plugin files to your Limnoria plugins directory
 2. Load the plugin: `/msg yourbot load Pollinations`
-3. Configure your API token (required for text generation)
+3. Obtain an API key from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys) and configure it (required for text generation — anonymous requests return 401)
 4. Configure other plugin settings as needed
 
 ## Commands
@@ -53,10 +54,11 @@ All settings can be configured per-channel using:
 ### Text Generation Settings
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `api_token` | "" | **Required** - Pollinations.ai API token from auth.pollinations.ai |
+| `api_token` | "" | **Required** — API key from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys). Sent as `Authorization: Bearer <key>`. Stored privately. |
 | `prompt` | "You are $botnick the IRC bot. Be brief, helpful" | System prompt for the AI ($botnick = bot's nickname) |
-| `text_model` | "openai" | AI model: openai (GPT-4o), claude (Claude Sonnet), mistral, llama |
-| `text_timeout` | 10 | Timeout in seconds for text generation requests |
+| `text_model` | "openai" | Primary text model for chat completions (see [Recommended models](#recommended-models)) |
+| `text_fallback_model` | "openai-fast" | Space-separated list of fallback models tried when the primary fails persistently (429/5xx) |
+| `text_timeout` | 30 | Timeout in seconds for text generation requests |
 | `context_lines` | 50 | Number of recent messages to include as context |
 | `nick_include` | True | Include user's nickname in the prompt |
 | `nick_strip` | True | Remove bot's nickname from responses |
@@ -96,21 +98,27 @@ All settings can be configured per-channel using:
 
 ## Configuration Examples
 
-### API Token Setup (Required)
-Get your API token from [auth.pollinations.ai](https://auth.pollinations.ai), then configure it:
+### API Key Setup (Required)
+Get your API key from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys), then configure it:
 ```
 # Global configuration
-/msg yourbot config plugins.Pollinations.api_token your_token_here
+/msg yourbot config supybot.Pollinations.api_token your_key_here
 
 # Or per-channel
-/msg yourbot config channel #mychannel plugins.Pollinations.api_token your_token_here
+/msg yourbot config channel #mychannel supybot.Pollinations.api_token your_key_here
 ```
+The key is stored privately (flagged `private=True` in the registry) and sent as `Authorization: Bearer <key>` on every text request. Anonymous requests (no key) return HTTP 401.
 
 ### Basic Setup
 ```
 /msg yourbot config channel #mychannel plugins.Pollinations.prompt "You are a friendly bot assistant."
 /msg yourbot config channel #mychannel plugins.Pollinations.context_lines 25
-/msg yourbot config channel #mychannel plugins.Pollinations.text_model claude
+/msg yourbot config channel #mychannel supybot.Pollinations.text_model openai
+```
+
+### Fallback Models Setup
+```
+/msg yourbot config channel #mychannel supybot.Pollinations.text_fallback_model "nova-fast openai-fast"
 ```
 
 ### Auto-Reply Setup
@@ -156,7 +164,7 @@ Set probability (50% chance to respond):
 3. Uses the entire message as input (not just the trigger word)
 4. Respects probability setting and minimum reply interval to avoid spam
 5. Supports `$botnick` placeholder to use bot's actual nickname
-6. Limits concurrent requests to prevent overload
+6. Limits concurrent requests to prevent overload (semaphore of 5; pending queue capped at 10 per channel)
 
 ### Image Generation
 1. Takes user prompt and combines with configured parameters
@@ -169,27 +177,29 @@ Set probability (50% chance to respond):
 - Python 3.6+
 - `requests` library
 - Internet connection
-- Pollinations.ai API token (get from [auth.pollinations.ai](https://auth.pollinations.ai))
+- Pollinations.ai API key (get from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys))
 
 ## API Usage
 This plugin uses the Pollinations.ai API:
 - **Text API**: `https://gen.pollinations.ai/v1/chat/completions` (unified API)
 - **Image API**: `https://image.pollinations.ai/prompt/`
 
-**Authentication**: API token required for text generation. Get yours at [auth.pollinations.ai](https://auth.pollinations.ai)
+**Authentication**: An API key is **required** for text generation — anonymous requests return HTTP 401. Obtain yours at [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys). The key is sent as `Authorization: Bearer <key>`.
 
-**Available Models**:
-- Text: `openai` (GPT-4o), `claude` (Claude Sonnet), `mistral`, `llama`
+**Available Models** (non-exhaustive, run `models` command for live list):
+- Text: `openai`, `openai-fast`, `openai-large`, `claude`, `claude-fast`, `claude-large`, `gemini`, `gemini-fast`, `mistral`, `grok`, `deepseek`, `qwen-coder`, `perplexity-fast`, `nova-micro`
 - Image: `flux` (default), `turbo`
+
+See [Recommended models](#recommended-models) for suggested primary/fallback combos.
 
 ## Troubleshooting
 
 ### Common Issues
 
 **"API Error 401" or "UNAUTHORIZED"**
-- You need to configure your API token
-- Get token from [auth.pollinations.ai](https://auth.pollinations.ai)
-- Set it: `/msg yourbot config plugins.Pollinations.api_token your_token_here`
+- An API key is now **required** for text generation — anonymous requests are no longer accepted
+- Get a key from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys)
+- Set it: `/msg yourbot config supybot.Pollinations.api_token your_key_here`
 
 **"API Error 400" with model error**
 - Invalid model name for the unified API
@@ -219,10 +229,10 @@ This plugin uses the Pollinations.ai API:
 - Check if log files exist and are readable
 
 **Request timeout or ping timeout**
-- Default timeout is 10 seconds
+- Default text timeout is 30 seconds (`text_timeout`); image timeout is 60 seconds
 - Reduce `context_lines` if context reading is slow
 - Check `min_reply_interval` to reduce auto-reply frequency
-- The plugin limits concurrent requests to prevent overload
+- The plugin limits concurrent requests to prevent overload (semaphore 5, pending queue max 10)
 
 ### Debug Information
 
@@ -244,10 +254,45 @@ To reload the plugin after changes:
 ## Performance & Stability
 
 The plugin includes several safeguards to prevent IRC ping timeouts:
-- **Request limiting**: Maximum 5 concurrent text generation requests
-- **Timeouts**: 10-second default timeout for API requests
+- **Request limiting**: Maximum 5 concurrent text generation requests (single semaphore acquire per request)
+- **Pending queue**: When the semaphore is full, requests are queued (max 10 per channel). When the queue is also full, a throttled notice is sent (once per 30 seconds per channel) instead of silently dropping
+- **Timeouts**: 30-second default for text, 60-second for image generation
 - **Thread management**: Controlled shutdown of background threads
 - **Rate limiting**: Minimum interval between auto-replies per channel
+- **Retry resilience**: urllib3 `Retry(total=2, backoff_factor=0.5, status_forcelist=[429,500,502,503,504])` on every text request (POST retried); on exhaustion, the real HTTP status is reported. Persistent 429/5xx on the primary model triggers a fallback attempt using `text_fallback_model`
+
+## Recommended Models
+
+| Role | Suggested model(s) | Notes |
+|------|---------------------|-------|
+| `text_model` (primary) | `openai` | GPT-5.4 Nano — fast, reliable |
+| `text_fallback_model` | `nova-fast openai-fast` | Tried in order when primary fails persistently |
+
+- **Avoid reasoning models** (`inkling`, `gpt-oss`, `perplexity-reasoning`, etc.) as fallbacks — they are significantly slower and will increase response latency
+- **Avoid alpha/community models** as primaries — they may be unstable or rate-limited; save them for experiments only
+- The plugin auto-skips unknown/invalid model names using a cached `/text/models` lookup (10-min TTL). Look for `Skipping unknown text fallback model` in the logs
+
+## Resilience & Troubleshooting Details
+
+### Retry behavior
+1. Each text request uses urllib3 `Retry` with `total=2`, exponential backoff (`backoff_factor=0.5`), and retries on status codes 429, 500, 502, 503, 504
+2. POST requests are retried (`allowed_methods=None`)
+3. After all retries are exhausted, the real HTTP status code is shown to the user
+4. If the primary model returns a persistent 429/5xx, a **fallback attempt** is made using the first valid model from `text_fallback_model`
+5. If every text model fails, the bot replies: `All text models failed. Last error: HTTP ...`
+
+### Overloaded service
+- When all retries are exhausted (RetryError), the bot replies with: *"The AI service is overloaded right now, please try again in a moment."* instead of a bare "Network error."
+
+### Queue-full notice
+- When the pending queue (max 10 per channel) is full, the bot sends a throttled notice (at most once every 30 seconds per channel) so users know their request was not silently dropped
+
+### Per-attempt telemetry
+Each text attempt is logged with:
+```
+Text attempt on model X took N.Ns (status=...)
+```
+Use this to identify slow or consistently-failing models and adjust your `text_model` / `text_fallback_model` accordingly.
 
 ## Contributing
 Feel free to submit issues and pull requests on GitHub.
