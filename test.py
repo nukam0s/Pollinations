@@ -29,10 +29,27 @@
 ###
 
 from supybot.test import *
+from unittest.mock import Mock, patch
 
 
 class PollinationsTestCase(PluginTestCase):
     plugins = ('Pollinations',)
+
+    def testTextModelAliasesRemainValidFallbacks(self):
+        plugin = self.irc.getCallback('Pollinations')
+        response = Mock(status_code=200)
+        response.json.return_value = [
+            {'name': 'openai/gpt-5-nano', 'aliases': ['openai-fast']},
+            {'id': 'google/gemini-2.5-flash'},
+            'legacy-model',
+        ]
+        with patch.object(plugin.session, 'get', return_value=response):
+            models = plugin._get_valid_text_models()
+
+        self.assertEqual(models, {
+            'openai/gpt-5-nano', 'openai-fast',
+            'google/gemini-2.5-flash', 'legacy-model',
+        })
 
 
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:
