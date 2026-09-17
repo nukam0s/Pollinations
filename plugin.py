@@ -202,6 +202,7 @@ class Pollinations(callbacks.Plugin):
                                 names.add(m["name"])
                             if m.get("id"):
                                 names.add(m["id"])
+                            names.update(m.get("aliases") or [])
                         elif isinstance(m, str):
                             names.add(m)
                     if names:
